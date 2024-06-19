@@ -9,7 +9,7 @@ on:
 env:
   KUBE_CONFIG: ${{ secrets.KUBE_CLUSTER_CONFIG_C2 }}
   KUBE_DEPLOYMENT_NAME: tx-indexer
-  KUBE_NAMESPACE: onbloc-t3
+  KUBE_NAMESPACE: testnet3-onbloc
   REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
   REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
   REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}

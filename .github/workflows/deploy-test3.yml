@@ -1,0 +1,49 @@
+name: Deploy testnet3 API by create tag
+
+on:
+  push:
+    tags:
+      - '*-test3'
+      - '*-test3-*'
+
+env:
+  KUBE_CONFIG: ${{ secrets.KUBE_CLUSTER_CONFIG_C2 }}
+  KUBE_DEPLOYMENT_NAME: tx-indexer
+  KUBE_NAMESPACE: testnet3-onbloc
+  REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+  REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+  REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+  REGISTRY_GROUP: onbloc
+  REGISTRY_SERVICE: tx-indexer
+  IMAGE_TAG: ${{ github.ref_name }}
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to docker registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+
+      - name: Build and push image to docker registry
+        id: build-image
+        run: |
+          # Build docker images
+          docker build -t $REGISTRY_URL/$REGISTRY_GROUP/$REGISTRY_SERVICE:$IMAGE_TAG .
+          # Push images
+          docker push $REGISTRY_URL/$REGISTRY_GROUP/$REGISTRY_SERVICE:$IMAGE_TAG
+          echo "image=$REGISTRY_URL/$REGISTRY_GROUP/$REGISTRY_SERVICE:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Redeploy service
+        uses: actions-hub/kubectl@master
+        with:
+          args: set image deployment/${{ env.KUBE_DEPLOYMENT_NAME }} container-0=${{ env.REGISTRY_URL }}/${{ env.REGISTRY_GROUP }}/${{ env.KUBE_DEPLOYMENT_NAME }}:${{ env.IMAGE_TAG }} --namespace ${{ env.KUBE_NAMESPACE }}

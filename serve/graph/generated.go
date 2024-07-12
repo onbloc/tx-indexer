@@ -3184,7 +3184,15 @@ func (ec *executionContext) _Query_transactions(ctx context.Context, field graph
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().Transactions(rctx, fc.Args["filter"].(model.TransactionFilter))
+		transactionFilter := fc.Args["filter"].(model.TransactionFilter)
+		if ec.Headers.Get("X-PAGE") != "" {
+			transactionFilter.Page, _ = strconv.Atoi(ec.Headers.Get("X-PAGE"))
+		}
+		transactionFilter.PageSize = 10000
+		if ec.Headers.Get("X-PAGE-SIZE") != "" {
+			transactionFilter.PageSize, _ = strconv.Atoi(ec.Headers.Get("X-PAGE-SIZE"))
+		}
+		return ec.resolvers.Query().Transactions(rctx, transactionFilter)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -3260,7 +3268,17 @@ func (ec *executionContext) _Query_blocks(ctx context.Context, field graphql.Col
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().Blocks(rctx, fc.Args["filter"].(model.BlockFilter))
+		
+		filter := fc.Args["filter"].(model.BlockFilter)
+		if ec.Headers.Get("X-PAGE") != "" {
+			filter.Page, _ = strconv.Atoi(ec.Headers.Get("X-PAGE"))
+		}
+		filter.PageSize = 10000
+		if ec.Headers.Get("X-PAGE-SIZE") != "" {
+			filter.PageSize, _ = strconv.Atoi(ec.Headers.Get("X-PAGE-SIZE"))
+		}
+
+		return ec.resolvers.Query().Blocks(rctx, filter)
 	})
 	if err != nil {
 		ec.Error(ctx, err)

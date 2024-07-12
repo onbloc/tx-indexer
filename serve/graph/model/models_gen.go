@@ -69,6 +69,9 @@ type BlockFilter struct {
 	FromTime *time.Time `json:"from_time,omitempty"`
 	// Maximum timestamp up to which to fetch Blocks, exclusive. Only Blocks created before this time are included.
 	ToTime *time.Time `json:"to_time,omitempty"`
+
+	Page int
+	PageSize int
 }
 
 // Defines a transaction within a block, its execution specifics and content.
@@ -322,6 +325,9 @@ type TransactionFilter struct {
 	// `events` is entered as an array and works exclusively.
 	// ex) `events[0] || events[1] || events[2]`
 	Events []*EventInput `json:"events,omitempty"`
+
+	Page int
+	PageSize int
 }
 
 // Transaction's message to filter Transactions.

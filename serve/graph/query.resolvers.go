@@ -37,13 +37,22 @@ func (r *queryResolver) Transactions(ctx context.Context, filter model.Transacti
 
 	var out []*model.Transaction
 	i := 0
+	startIndex := filter.PageSize * (filter.Page)
+	endIndex := filter.PageSize * (filter.Page + 1)
 	for {
+		if i < startIndex {
+			if !it.Next() {
+				return out, it.Error()
+			}
+			i++
+			continue
+		}
 		if i == maxElementsPerQuery {
 			graphql.AddErrorf(ctx, "max elements per query reached (%d)", maxElementsPerQuery)
 			return out, nil
 		}
 
-		if !it.Next() {
+		if !it.Next() || i >= endIndex {
 			return out, it.Error()
 		}
 
@@ -84,13 +93,22 @@ func (r *queryResolver) Blocks(ctx context.Context, filter model.BlockFilter) ([
 	var out []*model.Block
 
 	i := 0
+	startIndex := filter.PageSize * (filter.Page)
+	endIndex := filter.PageSize * (filter.Page + 1)
 	for {
+		if i < startIndex {
+			if !it.Next() {
+				return out, it.Error()
+			}
+			i++
+			continue
+		}
 		if i == maxElementsPerQuery {
 			graphql.AddErrorf(ctx, "max elements per query reached (%d)", maxElementsPerQuery)
 			return out, nil
 		}
 
-		if !it.Next() {
+		if !it.Next() || i >= endIndex {
 			return out, it.Error()
 		}
 

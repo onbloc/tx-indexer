@@ -6,10 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/httprate"
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"go.uber.org/zap"
 
@@ -168,22 +166,7 @@ func (c *startCfg) exec(ctx context.Context) error {
 
 	mux := chi.NewMux()
 
-	if c.rateLimit != 0 {
-		logger.Info("rate-limit set", zap.Int("rate-limit", c.rateLimit))
-		mux.Use(httprate.Limit(
-			c.rateLimit,
-			1*time.Minute,
-			httprate.WithKeyFuncs(httprate.KeyByRealIP),
-			httprate.WithLimitHandler(func(w http.ResponseWriter, r *http.Request) {
-				//nolint:errcheck // no need to handle error here, it had been checked before
-				ip, _ := httprate.KeyByRealIP(r)
-				logger.Debug("too many requests", zap.String("from", ip))
-
-				// send a json response to give more info when using the graphQL explorer
-				http.Error(w, `{"error": "too many requests"}`, http.StatusTooManyRequests)
-			}),
-		))
-	}
+	mux.Use(NewCORSHandler())
 
 	mux = j.SetupRoutes(mux)
 	mux = graph.Setup(db, em, mux)
@@ -230,4 +213,22 @@ func setupJSONRPC(
 	j.RegisterSubEndpoints(db)
 
 	return j
+}
+
+func NewCORSHandler() func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(
+			func(writer http.ResponseWriter, request *http.Request) {
+				allowedHeaders := "*"
+
+				if origin := request.Header.Get("Origin"); origin != "" {
+					writer.Header().Set("Access-Control-Allow-Origin", "*")
+					writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+					writer.Header().Set("Access-Control-Allow-Headers", allowedHeaders)
+				}
+
+				next.ServeHTTP(writer, request)
+			},
+		)
+	}
 }

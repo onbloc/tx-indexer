@@ -96,9 +96,14 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 		}
 
 		// Check if there is a block gap
-		if latestRemote <= latestLocal {
+		if latestRemote == latestLocal {
 			// No gap, nothing to sync
 			return nil
+		}
+
+		// Check if there is reset chains
+		if latestRemote < latestLocal {
+			return fmt.Errorf("reset chain: latestRemote(%d) < latestLocal(%d)", latestRemote, latestLocal)
 		}
 
 		gaps := f.chunkBuffer.reserveChunkRanges(

@@ -186,6 +186,8 @@ func (c *startCfg) exec(ctx context.Context) error {
 		))
 	}
 
+	mux.Use(NewCORSHandler())
+
 	mux = j.SetupRoutes(mux)
 	mux = graph.Setup(db, em, mux)
 	mux = health.Setup(db, mux)
@@ -235,4 +237,20 @@ func setupJSONRPC(
 	j.RegisterSubEndpoints(db)
 
 	return j
+}
+
+func NewCORSHandler() func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(
+			func(writer http.ResponseWriter, request *http.Request) {
+				allowedHeaders := "*"
+				if origin := request.Header.Get("Origin"); origin != "" {
+					writer.Header().Set("Access-Control-Allow-Origin", "*")
+					writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+					writer.Header().Set("Access-Control-Allow-Headers", allowedHeaders)
+				}
+				next.ServeHTTP(writer, request)
+			},
+		)
+	}
 }

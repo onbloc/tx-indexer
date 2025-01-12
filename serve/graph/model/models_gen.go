@@ -71,6 +71,20 @@ type BlockFilter struct {
 	ToTime *time.Time `json:"to_time,omitempty"`
 }
 
+// BlockList is a list of block edges provided by sequential access request.
+type BlockList struct {
+	// Edges contains provided edges of the sequential list.
+	Edges []*BlockListEdge `json:"edges"`
+	// PageInfo is an information about the current page of block edges.
+	PageInfo *PageInfo `json:"pageInfo"`
+}
+
+// BlockListEdge is a single edge in a sequential list of blocks.
+type BlockListEdge struct {
+	Block  *Block `json:"block"`
+	Cursor Cursor `json:"cursor"`
+}
+
 // Defines a transaction within a block, its execution specifics and content.
 type BlockTransaction struct {
 	// Hash computes the TMHASH hash of the wire encoded transaction.
@@ -948,6 +962,18 @@ type TransactionFilter struct {
 	// `events` is entered as an array and works exclusively.
 	// ex) `events[0] || events[1] || events[2]`
 	Events []*EventInput `json:"events,omitempty"`
+}
+
+// TransactionList is a list of transaction edges provided by sequential access request.
+type TransactionList struct {
+	Edges    []*TransactionListEdge `json:"edges"`
+	PageInfo *PageInfo              `json:"pageInfo"`
+}
+
+// TransactionListEdge is a single edge in a sequential list of transactions.
+type TransactionListEdge struct {
+	Transaction *Transaction `json:"transaction"`
+	Cursor      Cursor       `json:"cursor"`
 }
 
 // Transaction's message to filter Transactions.

@@ -910,6 +910,16 @@ type NestedFilterUnknownEvent struct {
 	Value *FilterString `json:"value,omitempty"`
 }
 
+// PageInfo contains information about a sequential access list page.
+type PageInfo struct {
+	// `first` is the cursor of the first edge of the edges list. null for empty list.
+	First *Cursor `json:"first,omitempty"`
+	// `last` if the cursor of the last edge of the edges list. null for empty list.
+	Last *Cursor `json:"last,omitempty"`
+	// `hasNext` specifies if there is another edge after the last one.
+	HasNext bool `json:"hasNext"`
+}
+
 // Root Query type to fetch data about Blocks and Transactions based on filters or retrieve the latest block height.
 type Query struct {
 }

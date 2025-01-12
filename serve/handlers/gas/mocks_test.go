@@ -7,7 +7,7 @@ import (
 
 type getLatestHeight func() (uint64, error)
 
-type blockIterator func(uint64, uint64) (storage.Iterator[*types.Block], error)
+type blockIterator func(uint64, uint64, bool) (storage.Iterator[*types.Block], error)
 
 type mockStorage struct {
 	getLatestHeightFn getLatestHeight
@@ -25,9 +25,10 @@ func (m *mockStorage) GetLatestHeight() (uint64, error) {
 func (m *mockStorage) BlockIterator(
 	fromBlockNum,
 	toBlockNum uint64,
+	ascending bool,
 ) (storage.Iterator[*types.Block], error) {
 	if m.blockIteratorFn != nil {
-		return m.blockIteratorFn(fromBlockNum, toBlockNum)
+		return m.blockIteratorFn(fromBlockNum, toBlockNum, ascending)
 	}
 
 	return nil, nil

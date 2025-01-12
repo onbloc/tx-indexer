@@ -10,5 +10,5 @@ type Storage interface {
 	GetLatestHeight() (uint64, error)
 
 	// BlockIterator iterates over Blocks, limiting the results to be between the provided block numbers
-	BlockIterator(fromBlockNum, toBlockNum uint64) (storage.Iterator[*types.Block], error)
+	BlockIterator(fromBlockNum, toBlockNum uint64, ascending bool) (storage.Iterator[*types.Block], error)
 }

@@ -60,6 +60,7 @@ func (h *Handler) getGasPriceBy(fromBlockNum, toBlockNum uint64) ([]*methods.Gas
 		BlockIterator(
 			fromBlockNum,
 			toBlockNum,
+			true,
 		)
 	if err != nil {
 		return nil, gqlerror.Wrap(err)

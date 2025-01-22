@@ -13,7 +13,7 @@ on:
     secrets:
       AWS_IAM_OIDC:
         required: true
-      DEV_REGION:
+      REGION:
         required: true
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_IAM_OIDC }}
-          aws-region: ${{ secrets.DEV_REGION }}
+          aws-region: ${{ secrets.REGION }}
 
       - name: Amazon ECR login
         id: login-ecr
@@ -46,10 +46,10 @@ jobs:
 
       - name: Docker tag
         run: |
-          docker tag ${{ inputs.app-name }}:latest 249291979454.dkr.ecr.${{ secrets.DEV_REGION }}.amazonaws.com/onbloc/${{ inputs.app-name }}-${{ inputs.env}}:latest
-          docker tag ${{ inputs.app-name }}:latest 249291979454.dkr.ecr.${{ secrets.DEV_REGION }}.amazonaws.com/onbloc/${{ inputs.app-name }}-${{ inputs.env}}:${{ github.sha }}
+          docker tag ${{ inputs.app-name }}:latest 249291979454.dkr.ecr.${{ secrets.REGION }}.amazonaws.com/onbloc/${{ inputs.app-name }}-${{ inputs.env}}:latest
+          docker tag ${{ inputs.app-name }}:latest 249291979454.dkr.ecr.${{ secrets.REGION }}.amazonaws.com/onbloc/${{ inputs.app-name }}-${{ inputs.env}}:${{ github.sha }}
 
       - name: Pushing Docker images to Amazon ECR
         run: |
-          docker push 249291979454.dkr.ecr.${{ secrets.DEV_REGION }}.amazonaws.com/onbloc/${{ inputs.app-name }}-${{ inputs.env}}:latest
-          docker push 249291979454.dkr.ecr.${{ secrets.DEV_REGION }}.amazonaws.com/onbloc/${{ inputs.app-name }}-${{ inputs.env}}:${{ github.sha }}
+          docker push 249291979454.dkr.ecr.${{ secrets.REGION }}.amazonaws.com/onbloc/${{ inputs.app-name }}-${{ inputs.env}}:latest
+          docker push 249291979454.dkr.ecr.${{ secrets.REGION }}.amazonaws.com/onbloc/${{ inputs.app-name }}-${{ inputs.env}}:${{ github.sha }}

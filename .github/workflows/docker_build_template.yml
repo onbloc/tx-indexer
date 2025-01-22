@@ -33,8 +33,7 @@ jobs:
 
       - name: Check generated files are up to date
         run: |
-          echo ${{ secrets.AWS_IAM_OIDC }}
-          docker build --target ${{ inputs.app-name }} -t ${{ inputs.app-name }}:latest .
+          docker build -t ${{ inputs.app-name }}:latest .
       - name: AWS Set credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:

@@ -1,9 +1,9 @@
-name: dev push onbloc-tx-indexer
+name: portal-loop push onbloc-tx-indexer
 
 on:
   push:
     branches:
-      - test
+      - portal-loop
   workflow_dispatch:
 
 permissions:
@@ -12,11 +12,11 @@ permissions:
 jobs:
   main_batch_db_watcher:
     name: Run tx-indexer app
-    uses: ./.github/workflows/main_app_template.yml
+    uses: ./.github/workflows/app_template.yml
     with:
       app-name: 'tx-indexer'
-      env: 'test'
+      env: 'portal-loop'
     secrets:
       AWS_IAM_OIDC: ${{ secrets.AWS_IAM_OIDC }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-      DEV_REGION: ${{ secrets.DEV_REGION }}
+      REGION: ${{ secrets.DEV_REGION }}

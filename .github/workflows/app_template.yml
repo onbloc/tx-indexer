@@ -12,7 +12,7 @@ on:
         required: true
       PAT_TOKEN:
         required: true
-      DEV_REGION:
+      REGION:
         required: true
 permissions:
   contents: write
@@ -38,7 +38,7 @@ jobs:
       env: ${{ inputs.env }}
     secrets:
       AWS_IAM_OIDC: ${{ secrets.AWS_IAM_OIDC }}
-      DEV_REGION: ${{ secrets.DEV_REGION }}
+      REGION: ${{ secrets.REGION }}
   helm_chart_push:
     name: helm chart image tag push
     uses: ./.github/workflows/helm_chart_push.yml

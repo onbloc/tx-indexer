@@ -38,9 +38,9 @@ jobs:
           git add .
           git commit -m "Pushed onbloc-${{ inputs.app-name }}-${{ inputs.env }}:${{ github.sha }}"
           git push origin deploy-${{ github.run_id }}-${{ inputs.app-name }}
-          git checkout dev
+          git checkout ${{ inputs.env }}
           git pull --rebase origin deploy-${{ github.run_id }}-${{ inputs.app-name }} || git rebase --abort
-          git push origin dev
+          git push origin ${{ inputs.env }}
           git branch -d deploy-${{ github.run_id }}-${{ inputs.app-name }}
           git push origin --delete deploy-${{ github.run_id }}-${{ inputs.app-name }}
           echo "  ____                     _ "

@@ -74,8 +74,8 @@ func TestGetGasPricesByBlocks_Transactions(t *testing.T) {
 				{
 					Denom:   "ugnot",
 					High:    1,
-					Average: 0.52,
-					Low:     1,
+					Average: 0.5208333333333333,
+					Low:     0.25,
 				},
 			},
 		},

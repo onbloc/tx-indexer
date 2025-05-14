@@ -5,8 +5,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"sort"
 	"time"
+
+	_ "github.com/gnolang/gno/gno.land/pkg/sdk/vm"
 
 	queue "github.com/madz-lab/insertion-queue"
 	"go.uber.org/zap"
@@ -35,6 +39,8 @@ type Fetcher struct {
 
 	logger      *zap.Logger
 	chunkBuffer *slots
+
+	genesisPath string
 
 	maxSlots     int
 	maxChunkSize int64
@@ -85,7 +91,14 @@ func (f *Fetcher) fetchGenesisData() error {
 
 	f.logger.Info("Fetching genesis")
 
-	block, err := getGenesisBlock(f.client)
+	var block *bft_types.Block
+
+	if f.genesisPath != "" {
+		block, err = fetchGenesisData(f.genesisPath)
+	} else {
+		block, err = getGenesisBlock(f.client)
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to fetch genesis block: %w", err)
 	}
@@ -353,6 +366,68 @@ func getGenesisBlock(client Client) (*bft_types.Block, error) {
 			TotalTxs: int64(len(txs)),
 			Time:     gblock.Genesis.GenesisTime,
 			ChainID:  gblock.Genesis.ChainID,
+		},
+		Data: bft_types.Data{
+			Txs: txs,
+		},
+	}
+
+	return block, nil
+}
+
+func fetchGenesisData(genesisPath string) (*bft_types.Block, error) {
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 5 * time.Minute,
+	}
+
+	// Make HTTP GET request
+	resp, err := client.Get(genesisPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch genesis file: %w", err)
+	}
+
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch genesis file: status code %d", resp.StatusCode)
+	}
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read genesis file: %w", err)
+	}
+
+	var genesisData bft_types.GenesisDoc
+
+	if err := amino.UnmarshalJSON(body, &genesisData); err != nil {
+		return nil, fmt.Errorf("failed to parse genesis file: %w", err)
+	}
+
+	appState, ok := genesisData.AppState.(gnoland.GnoGenesisState)
+	if !ok {
+		return nil, fmt.Errorf("unknown genesis state kind '%T'", genesisData.AppState)
+	}
+
+	// Convert genesis transactions
+	txs := make([]bft_types.Tx, len(appState.Txs))
+
+	for i, tx := range appState.Txs {
+		txs[i], err = amino.Marshal(tx.Tx)
+		if err != nil {
+			return nil, fmt.Errorf("unable to marshal genesis tx: %w", err)
+		}
+	}
+
+	// Create block from genesis data
+	block := &bft_types.Block{
+		Header: bft_types.Header{
+			NumTxs:   int64(len(txs)),
+			TotalTxs: int64(len(txs)),
+			Time:     genesisData.GenesisTime,
+			ChainID:  genesisData.ChainID,
 		},
 		Data: bft_types.Data{
 			Txs: txs,

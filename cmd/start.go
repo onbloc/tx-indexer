@@ -32,6 +32,7 @@ type startCfg struct {
 	remote        string
 	dbPath        string
 	logLevel      string
+	genesisPath   string
 
 	maxSlots     int
 	maxChunkSize int64
@@ -108,6 +109,13 @@ func (c *startCfg) registerFlags(fs *flag.FlagSet) {
 		0,
 		"the maximum HTTP requests allowed per minute per IP, unlimited by default",
 	)
+
+	fs.StringVar(
+		&c.genesisPath,
+		"genesis-path",
+		"",
+		"the path to the genesis file",
+	)
 }
 
 // exec executes the indexer start command
@@ -158,6 +166,7 @@ func (c *startCfg) exec(ctx context.Context) error {
 		),
 		fetch.WithMaxSlots(c.maxSlots),
 		fetch.WithMaxChunkSize(c.maxChunkSize),
+		fetch.WithGenesisPath(c.genesisPath),
 	)
 
 	// Create the JSON-RPC service

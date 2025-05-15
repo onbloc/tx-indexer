@@ -27,3 +27,11 @@ func WithMaxChunkSize(maxChunkSize int64) Option {
 		f.maxChunkSize = maxChunkSize
 	}
 }
+
+// WithGenesisPath sets the path to the genesis file
+// for the fetcher
+func WithGenesisPath(genesisPath string) Option {
+	return func(f *Fetcher) {
+		f.genesisPath = genesisPath
+	}
+}

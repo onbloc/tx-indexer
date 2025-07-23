@@ -121,23 +121,27 @@ type ComplexityRoot struct {
 	}
 
 	MsgAddPackage struct {
-		Creator func(childComplexity int) int
-		Deposit func(childComplexity int) int
-		Package func(childComplexity int) int
+		Creator    func(childComplexity int) int
+		Deposit    func(childComplexity int) int
+		MaxDeposit func(childComplexity int) int
+		Package    func(childComplexity int) int
+		Send       func(childComplexity int) int
 	}
 
 	MsgCall struct {
-		Args    func(childComplexity int) int
-		Caller  func(childComplexity int) int
-		Func    func(childComplexity int) int
-		PkgPath func(childComplexity int) int
-		Send    func(childComplexity int) int
+		Args       func(childComplexity int) int
+		Caller     func(childComplexity int) int
+		Func       func(childComplexity int) int
+		MaxDeposit func(childComplexity int) int
+		PkgPath    func(childComplexity int) int
+		Send       func(childComplexity int) int
 	}
 
 	MsgRun struct {
-		Caller  func(childComplexity int) int
-		Package func(childComplexity int) int
-		Send    func(childComplexity int) int
+		Caller     func(childComplexity int) int
+		MaxDeposit func(childComplexity int) int
+		Package    func(childComplexity int) int
+		Send       func(childComplexity int) int
 	}
 
 	PageInfo struct {
@@ -547,12 +551,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.MsgAddPackage.Deposit(childComplexity), true
 
+	case "MsgAddPackage.max_deposit":
+		if e.complexity.MsgAddPackage.MaxDeposit == nil {
+			break
+		}
+
+		return e.complexity.MsgAddPackage.MaxDeposit(childComplexity), true
+
 	case "MsgAddPackage.package":
 		if e.complexity.MsgAddPackage.Package == nil {
 			break
 		}
 
 		return e.complexity.MsgAddPackage.Package(childComplexity), true
+
+	case "MsgAddPackage.send":
+		if e.complexity.MsgAddPackage.Send == nil {
+			break
+		}
+
+		return e.complexity.MsgAddPackage.Send(childComplexity), true
 
 	case "MsgCall.args":
 		if e.complexity.MsgCall.Args == nil {
@@ -575,6 +593,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.MsgCall.Func(childComplexity), true
 
+	case "MsgCall.max_deposit":
+		if e.complexity.MsgCall.MaxDeposit == nil {
+			break
+		}
+
+		return e.complexity.MsgCall.MaxDeposit(childComplexity), true
+
 	case "MsgCall.pkg_path":
 		if e.complexity.MsgCall.PkgPath == nil {
 			break
@@ -595,6 +620,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.MsgRun.Caller(childComplexity), true
+
+	case "MsgRun.max_deposit":
+		if e.complexity.MsgRun.MaxDeposit == nil {
+			break
+		}
+
+		return e.complexity.MsgRun.MaxDeposit(childComplexity), true
 
 	case "MsgRun.package":
 		if e.complexity.MsgRun.Package == nil {
@@ -1748,6 +1780,14 @@ input FilterMsgAddPackage {
 	filter for deposit field.
 	"""
 	deposit: FilterString
+	"""
+	filter for send field.
+	"""
+	send: FilterString
+	"""
+	filter for max_deposit field.
+	"""
+	max_deposit: FilterString
 }
 """
 filter for MsgCall objects
@@ -1785,6 +1825,10 @@ input FilterMsgCall {
 	filter for args field.
 	"""
 	args: FilterString
+	"""
+	filter for max_deposit field.
+	"""
+	max_deposit: FilterString
 }
 """
 filter for MsgRun objects
@@ -1814,6 +1858,10 @@ input FilterMsgRun {
 	filter for package field.
 	"""
 	package: NestedFilterMemPackage
+	"""
+	filter for max_deposit field.
+	"""
+	max_deposit: FilterString
 }
 """
 Filter type for string fields. It contains a variety of filter types for string types. All added filters here are processed as AND operators.
@@ -2178,7 +2226,17 @@ type MsgAddPackage {
 	the amount of funds to be deposited at deployment, if any ("<amount><denomination>").
 	ex) ` + "`" + `1000000ugnot` + "`" + `
 	"""
-	deposit: String! @filterable
+	deposit: String! @filterable @deprecated(reason: "Use ` + "`" + `send` + "`" + ` instead.")
+	"""
+	the amount of funds to be deposited at deployment, if any ("<amount><denomination>").
+	ex) ` + "`" + `1000000ugnot` + "`" + `
+	"""
+	send: String! @filterable
+	"""
+	the maximum amount of funds to be deposited at deployment used for storage, if any ("<amount><denomination>").
+	ex) ` + "`" + `1000000ugnot` + "`" + `
+	"""
+	max_deposit: String! @filterable
 }
 """
 ` + "`" + `MsgAddPackageInput` + "`" + ` represents input parameters required when the message type is ` + "`" + `add_package` + "`" + `.
@@ -2227,6 +2285,11 @@ type MsgCall {
 	` + "`" + `args` + "`" + ` are the arguments passed to the executed function.
 	"""
 	args: [String!] @filterable
+	"""
+	the maximum amount of funds to be deposited used for storage, if any ("<amount><denomination>").
+	ex) ` + "`" + `1000000ugnot` + "`" + `
+	"""
+	max_deposit: String! @filterable
 }
 """
 ` + "`" + `MsgCallInput` + "`" + ` represents input parameters required when the message type is ` + "`" + `exec` + "`" + `.
@@ -2278,6 +2341,11 @@ type MsgRun {
 	the package being executed.
 	"""
 	package: MemPackage! @filterable
+	"""
+	the maximum amount of funds to be deposited used for storage, if any ("<amount><denomination>").
+	ex) ` + "`" + `1000000ugnot` + "`" + `
+	"""
+	max_deposit: String! @filterable
 }
 """
 ` + "`" + `MsgRunInput` + "`" + ` represents input parameters required when the message type is ` + "`" + `run` + "`" + `.
@@ -2580,6 +2648,14 @@ input NestedFilterMsgAddPackage {
 	filter for deposit field.
 	"""
 	deposit: FilterString
+	"""
+	filter for send field.
+	"""
+	send: FilterString
+	"""
+	filter for max_deposit field.
+	"""
+	max_deposit: FilterString
 }
 """
 filter for MsgCall objects
@@ -2617,6 +2693,10 @@ input NestedFilterMsgCall {
 	filter for args field.
 	"""
 	args: FilterString
+	"""
+	filter for max_deposit field.
+	"""
+	max_deposit: FilterString
 }
 """
 filter for MsgRun objects
@@ -2646,6 +2726,10 @@ input NestedFilterMsgRun {
 	filter for package field.
 	"""
 	package: NestedFilterMemPackage
+	"""
+	filter for max_deposit field.
+	"""
+	max_deposit: FilterString
 }
 """
 filter for TransactionMessage objects
@@ -3145,6 +3229,7 @@ func (ec *executionContext) dir_filterable_args(ctx context.Context, rawArgs map
 	args["extras"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) dir_filterable_argsExtras(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3177,6 +3262,7 @@ func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs
 	args["name"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field_Query___type_argsName(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3224,6 +3310,7 @@ func (ec *executionContext) field_Query_blocks_args(ctx context.Context, rawArgs
 	args["ascending"] = arg3
 	return args, nil
 }
+
 func (ec *executionContext) field_Query_blocks_argsFilter(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3322,6 +3409,7 @@ func (ec *executionContext) field_Query_getBlocks_args(ctx context.Context, rawA
 	args["where"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field_Query_getBlocks_argsWhere(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3354,6 +3442,7 @@ func (ec *executionContext) field_Query_getTransactions_args(ctx context.Context
 	args["where"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field_Query_getTransactions_argsWhere(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3401,6 +3490,7 @@ func (ec *executionContext) field_Query_transactions_args(ctx context.Context, r
 	args["ascending"] = arg3
 	return args, nil
 }
+
 func (ec *executionContext) field_Query_transactions_argsFilter(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3499,6 +3589,7 @@ func (ec *executionContext) field_Subscription_blocks_args(ctx context.Context, 
 	args["filter"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field_Subscription_blocks_argsFilter(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3531,6 +3622,7 @@ func (ec *executionContext) field_Subscription_getBlocks_args(ctx context.Contex
 	args["where"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field_Subscription_getBlocks_argsWhere(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3563,6 +3655,7 @@ func (ec *executionContext) field_Subscription_getTransactions_args(ctx context.
 	args["where"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field_Subscription_getTransactions_argsWhere(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3595,6 +3688,7 @@ func (ec *executionContext) field_Subscription_transactions_args(ctx context.Con
 	args["filter"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field_Subscription_transactions_argsFilter(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3627,6 +3721,7 @@ func (ec *executionContext) field___Type_enumValues_args(ctx context.Context, ra
 	args["includeDeprecated"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field___Type_enumValues_argsIncludeDeprecated(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -3659,6 +3754,7 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 	args["includeDeprecated"] = arg0
 	return args, nil
 }
+
 func (ec *executionContext) field___Type_fields_argsIncludeDeprecated(
 	ctx context.Context,
 	rawArgs map[string]interface{},
@@ -6568,6 +6664,138 @@ func (ec *executionContext) fieldContext_MsgAddPackage_deposit(_ context.Context
 	return fc, nil
 }
 
+func (ec *executionContext) _MsgAddPackage_send(ctx context.Context, field graphql.CollectedField, obj *model.MsgAddPackage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MsgAddPackage_send(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		directive0 := func(rctx context.Context) (interface{}, error) {
+			ctx = rctx // use context from middleware stack in children
+			return obj.Send, nil
+		}
+
+		directive1 := func(ctx context.Context) (interface{}, error) {
+			if ec.directives.Filterable == nil {
+				var zeroVal string
+				return zeroVal, errors.New("directive filterable is not implemented")
+			}
+			return ec.directives.Filterable(ctx, obj, directive0, nil)
+		}
+
+		tmp, err := directive1(rctx)
+		if err != nil {
+			return nil, graphql.ErrorOnPath(ctx, err)
+		}
+		if tmp == nil {
+			return nil, nil
+		}
+		if data, ok := tmp.(string); ok {
+			return data, nil
+		}
+		return nil, fmt.Errorf(`unexpected type %T from directive, should be string`, tmp)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MsgAddPackage_send(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MsgAddPackage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MsgAddPackage_max_deposit(ctx context.Context, field graphql.CollectedField, obj *model.MsgAddPackage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MsgAddPackage_max_deposit(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		directive0 := func(rctx context.Context) (interface{}, error) {
+			ctx = rctx // use context from middleware stack in children
+			return obj.MaxDeposit, nil
+		}
+
+		directive1 := func(ctx context.Context) (interface{}, error) {
+			if ec.directives.Filterable == nil {
+				var zeroVal string
+				return zeroVal, errors.New("directive filterable is not implemented")
+			}
+			return ec.directives.Filterable(ctx, obj, directive0, nil)
+		}
+
+		tmp, err := directive1(rctx)
+		if err != nil {
+			return nil, graphql.ErrorOnPath(ctx, err)
+		}
+		if tmp == nil {
+			return nil, nil
+		}
+		if data, ok := tmp.(string); ok {
+			return data, nil
+		}
+		return nil, fmt.Errorf(`unexpected type %T from directive, should be string`, tmp)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MsgAddPackage_max_deposit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MsgAddPackage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _MsgCall_caller(ctx context.Context, field graphql.CollectedField, obj *model.MsgCall) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_MsgCall_caller(ctx, field)
 	if err != nil {
@@ -6895,6 +7123,72 @@ func (ec *executionContext) fieldContext_MsgCall_args(_ context.Context, field g
 	return fc, nil
 }
 
+func (ec *executionContext) _MsgCall_max_deposit(ctx context.Context, field graphql.CollectedField, obj *model.MsgCall) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MsgCall_max_deposit(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		directive0 := func(rctx context.Context) (interface{}, error) {
+			ctx = rctx // use context from middleware stack in children
+			return obj.MaxDeposit, nil
+		}
+
+		directive1 := func(ctx context.Context) (interface{}, error) {
+			if ec.directives.Filterable == nil {
+				var zeroVal string
+				return zeroVal, errors.New("directive filterable is not implemented")
+			}
+			return ec.directives.Filterable(ctx, obj, directive0, nil)
+		}
+
+		tmp, err := directive1(rctx)
+		if err != nil {
+			return nil, graphql.ErrorOnPath(ctx, err)
+		}
+		if tmp == nil {
+			return nil, nil
+		}
+		if data, ok := tmp.(string); ok {
+			return data, nil
+		}
+		return nil, fmt.Errorf(`unexpected type %T from directive, should be string`, tmp)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MsgCall_max_deposit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MsgCall",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _MsgRun_caller(ctx context.Context, field graphql.CollectedField, obj *model.MsgRun) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_MsgRun_caller(ctx, field)
 	if err != nil {
@@ -7096,6 +7390,72 @@ func (ec *executionContext) fieldContext_MsgRun_package(_ context.Context, field
 				return ec.fieldContext_MemPackage_files(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MemPackage", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MsgRun_max_deposit(ctx context.Context, field graphql.CollectedField, obj *model.MsgRun) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MsgRun_max_deposit(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		directive0 := func(rctx context.Context) (interface{}, error) {
+			ctx = rctx // use context from middleware stack in children
+			return obj.MaxDeposit, nil
+		}
+
+		directive1 := func(ctx context.Context) (interface{}, error) {
+			if ec.directives.Filterable == nil {
+				var zeroVal string
+				return zeroVal, errors.New("directive filterable is not implemented")
+			}
+			return ec.directives.Filterable(ctx, obj, directive0, nil)
+		}
+
+		tmp, err := directive1(rctx)
+		if err != nil {
+			return nil, graphql.ErrorOnPath(ctx, err)
+		}
+		if tmp == nil {
+			return nil, nil
+		}
+		if data, ok := tmp.(string); ok {
+			return data, nil
+		}
+		return nil, fmt.Errorf(`unexpected type %T from directive, should be string`, tmp)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MsgRun_max_deposit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MsgRun",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -12584,7 +12944,7 @@ func (ec *executionContext) unmarshalInputFilterMsgAddPackage(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"_and", "_or", "_not", "creator", "package", "deposit"}
+	fieldsInOrder := [...]string{"_and", "_or", "_not", "creator", "package", "deposit", "send", "max_deposit"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -12633,6 +12993,20 @@ func (ec *executionContext) unmarshalInputFilterMsgAddPackage(ctx context.Contex
 				return it, err
 			}
 			it.Deposit = data
+		case "send":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("send"))
+			data, err := ec.unmarshalOFilterString2ᚖgithubᚗcomᚋgnolangᚋtxᚑindexerᚋserveᚋgraphᚋmodelᚐFilterString(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Send = data
+		case "max_deposit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_deposit"))
+			data, err := ec.unmarshalOFilterString2ᚖgithubᚗcomᚋgnolangᚋtxᚑindexerᚋserveᚋgraphᚋmodelᚐFilterString(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxDeposit = data
 		}
 	}
 
@@ -12646,7 +13020,7 @@ func (ec *executionContext) unmarshalInputFilterMsgCall(ctx context.Context, obj
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"_and", "_or", "_not", "caller", "send", "pkg_path", "func", "args"}
+	fieldsInOrder := [...]string{"_and", "_or", "_not", "caller", "send", "pkg_path", "func", "args", "max_deposit"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -12709,6 +13083,13 @@ func (ec *executionContext) unmarshalInputFilterMsgCall(ctx context.Context, obj
 				return it, err
 			}
 			it.Args = data
+		case "max_deposit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_deposit"))
+			data, err := ec.unmarshalOFilterString2ᚖgithubᚗcomᚋgnolangᚋtxᚑindexerᚋserveᚋgraphᚋmodelᚐFilterString(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxDeposit = data
 		}
 	}
 
@@ -12722,7 +13103,7 @@ func (ec *executionContext) unmarshalInputFilterMsgRun(ctx context.Context, obj 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"_and", "_or", "_not", "caller", "send", "package"}
+	fieldsInOrder := [...]string{"_and", "_or", "_not", "caller", "send", "package", "max_deposit"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -12771,6 +13152,13 @@ func (ec *executionContext) unmarshalInputFilterMsgRun(ctx context.Context, obj 
 				return it, err
 			}
 			it.Package = data
+		case "max_deposit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_deposit"))
+			data, err := ec.unmarshalOFilterString2ᚖgithubᚗcomᚋgnolangᚋtxᚑindexerᚋserveᚋgraphᚋmodelᚐFilterString(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxDeposit = data
 		}
 	}
 
@@ -13981,7 +14369,7 @@ func (ec *executionContext) unmarshalInputNestedFilterMsgAddPackage(ctx context.
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"_and", "_or", "_not", "creator", "package", "deposit"}
+	fieldsInOrder := [...]string{"_and", "_or", "_not", "creator", "package", "deposit", "send", "max_deposit"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -14030,6 +14418,20 @@ func (ec *executionContext) unmarshalInputNestedFilterMsgAddPackage(ctx context.
 				return it, err
 			}
 			it.Deposit = data
+		case "send":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("send"))
+			data, err := ec.unmarshalOFilterString2ᚖgithubᚗcomᚋgnolangᚋtxᚑindexerᚋserveᚋgraphᚋmodelᚐFilterString(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Send = data
+		case "max_deposit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_deposit"))
+			data, err := ec.unmarshalOFilterString2ᚖgithubᚗcomᚋgnolangᚋtxᚑindexerᚋserveᚋgraphᚋmodelᚐFilterString(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxDeposit = data
 		}
 	}
 
@@ -14043,7 +14445,7 @@ func (ec *executionContext) unmarshalInputNestedFilterMsgCall(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"_and", "_or", "_not", "caller", "send", "pkg_path", "func", "args"}
+	fieldsInOrder := [...]string{"_and", "_or", "_not", "caller", "send", "pkg_path", "func", "args", "max_deposit"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -14106,6 +14508,13 @@ func (ec *executionContext) unmarshalInputNestedFilterMsgCall(ctx context.Contex
 				return it, err
 			}
 			it.Args = data
+		case "max_deposit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_deposit"))
+			data, err := ec.unmarshalOFilterString2ᚖgithubᚗcomᚋgnolangᚋtxᚑindexerᚋserveᚋgraphᚋmodelᚐFilterString(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxDeposit = data
 		}
 	}
 
@@ -14119,7 +14528,7 @@ func (ec *executionContext) unmarshalInputNestedFilterMsgRun(ctx context.Context
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"_and", "_or", "_not", "caller", "send", "package"}
+	fieldsInOrder := [...]string{"_and", "_or", "_not", "caller", "send", "package", "max_deposit"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -14168,6 +14577,13 @@ func (ec *executionContext) unmarshalInputNestedFilterMsgRun(ctx context.Context
 				return it, err
 			}
 			it.Package = data
+		case "max_deposit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("max_deposit"))
+			data, err := ec.unmarshalOFilterString2ᚖgithubᚗcomᚋgnolangᚋtxᚑindexerᚋserveᚋgraphᚋmodelᚐFilterString(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxDeposit = data
 		}
 	}
 
@@ -15282,6 +15698,16 @@ func (ec *executionContext) _MsgAddPackage(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "send":
+			out.Values[i] = ec._MsgAddPackage_send(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "max_deposit":
+			out.Values[i] = ec._MsgAddPackage_max_deposit(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -15338,6 +15764,11 @@ func (ec *executionContext) _MsgCall(ctx context.Context, sel ast.SelectionSet, 
 			}
 		case "args":
 			out.Values[i] = ec._MsgCall_args(ctx, field, obj)
+		case "max_deposit":
+			out.Values[i] = ec._MsgCall_max_deposit(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -15384,6 +15815,11 @@ func (ec *executionContext) _MsgRun(ctx context.Context, sel ast.SelectionSet, o
 			}
 		case "package":
 			out.Values[i] = ec._MsgRun_package(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "max_deposit":
+			out.Values[i] = ec._MsgRun_max_deposit(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -18030,7 +18466,7 @@ func (ec *executionContext) unmarshalOMessageRoute2ᚖgithubᚗcomᚋgnolangᚋt
 	if v == nil {
 		return nil, nil
 	}
-	var res = new(model.MessageRoute)
+	res := new(model.MessageRoute)
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
@@ -18046,7 +18482,7 @@ func (ec *executionContext) unmarshalOMessageType2ᚖgithubᚗcomᚋgnolangᚋtx
 	if v == nil {
 		return nil, nil
 	}
-	var res = new(model.MessageType)
+	res := new(model.MessageType)
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }

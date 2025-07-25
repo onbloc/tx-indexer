@@ -33,7 +33,7 @@ jobs:
     name: Docker Build
     uses: ./.github/workflows/docker_build_template.yml
     with:
-      go-version: '1.22.x'
+      go-version: '1.23.x'
       app-name: ${{ inputs.app-name }}
       env: ${{ inputs.env }}
     secrets:

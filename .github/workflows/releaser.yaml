@@ -23,8 +23,8 @@ jobs:
           go-version: 1.21
           cache: true
 
-      - uses: sigstore/cosign-installer@v3.9.2
-      - uses: anchore/sbom-action/download-syft@v0.20.4
+      - uses: sigstore/cosign-installer@v3.7.0
+      - uses: anchore/sbom-action/download-syft@v0.17.8
 
       - uses: docker/login-action@v3
         with:

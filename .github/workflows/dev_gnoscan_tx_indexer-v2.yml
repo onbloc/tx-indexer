@@ -1,4 +1,4 @@
-name: dev gnoscan push onbloc-tx-indexer
+name: dev gnoscan push onbloc-tx-indexer v2
 
 on:
   push:

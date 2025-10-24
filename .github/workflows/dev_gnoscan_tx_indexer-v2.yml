@@ -15,7 +15,7 @@ jobs:
     uses: ./.github/workflows/app_template.yml
     with:
       app-name: 'tx-indexer'
-      env: 'dev_gnoscan'
+      env: 'dev-gnoscan-v2'
     secrets:
       AWS_IAM_OIDC: ${{ secrets.AWS_IAM_OIDC }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}

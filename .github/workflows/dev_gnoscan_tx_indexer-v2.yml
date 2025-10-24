@@ -19,4 +19,4 @@ jobs:
     secrets:
       AWS_IAM_OIDC: ${{ secrets.AWS_IAM_OIDC }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-      REGION: ${{ secrets.DEV_REGION }}
+      REGION: ${{ secrets.DEV_REGION_V2 }}

@@ -15,7 +15,7 @@ jobs:
     uses: ./.github/workflows/app_template.yml
     with:
       app-name: "tx-indexer"
-      env: "beta"
+      env: "gnoswap-beta"
     secrets:
       AWS_IAM_OIDC: ${{ secrets.AWS_IAM_OIDC }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}

@@ -39,6 +39,7 @@ type startCfg struct {
 	rateLimit int
 
 	disableIntrospection bool
+	clearOnReset         bool
 }
 
 // newStartCmd creates the indexer start command
@@ -117,6 +118,13 @@ func (c *startCfg) registerFlags(fs *flag.FlagSet) {
 		false,
 		"disable GraphQL introspection queries if needed. This will cause malfunctions when using the GraphQL playground",
 	)
+
+	fs.BoolVar(
+		&c.clearOnReset,
+		"clear-on-reset",
+		false,
+		"clear all data from storage when the application resets",
+	)
 }
 
 // exec executes the indexer start command
@@ -167,6 +175,8 @@ func (c *startCfg) exec(ctx context.Context) error {
 		),
 		fetch.WithMaxSlots(c.maxSlots),
 		fetch.WithMaxChunkSize(c.maxChunkSize),
+		fetch.WithClearOnReset(c.clearOnReset),
+		fetch.WithDBPath(c.dbPath),
 	)
 
 	// Create the JSON-RPC service

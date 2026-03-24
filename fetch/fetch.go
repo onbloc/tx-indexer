@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"sort"
 	"time"
@@ -45,6 +47,7 @@ type Fetcher struct {
 
 	dbPath       string
 	clearOnReset bool
+	genesisURL   string // optional URL to download genesis.json as fallback
 }
 
 // New creates a new data fetcher instance
@@ -92,7 +95,18 @@ func (f *Fetcher) fetchGenesisData(ctx context.Context) error {
 
 	block, err := getGenesisBlock(ctx, f.client)
 	if err != nil {
-		return fmt.Errorf("failed to fetch genesis block: %w", err)
+		f.logger.Warn("RPC genesis fetch failed", zap.Error(err))
+
+		if f.genesisURL == "" {
+			return fmt.Errorf("failed to fetch genesis block via RPC and no genesis-url configured: %w", err)
+		}
+
+		f.logger.Info("Falling back to genesis URL", zap.String("url", f.genesisURL))
+
+		block, err = f.getGenesisBlockFromURL(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to fetch genesis block from URL: %w", err)
+		}
 	}
 
 	results, err := f.client.GetBlockResults(ctx, 0)
@@ -140,6 +154,8 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 		// some versions of gno networks don't support this.
 		// In the future, we should hard fail if genesis is not fetch-able
 		f.logger.Error("unable to fetch genesis data", zap.Error(err))
+
+		return err
 	}
 
 	collectorCh := make(chan *workerResponse, DefaultMaxSlots)
@@ -389,4 +405,89 @@ func getGenesisBlock(ctx context.Context, client Client) (*bft_types.Block, erro
 	}
 
 	return block, nil
+}
+
+// getGenesisBlockFromURL downloads genesis.json from the configured URL
+// and parses it into a Block. Streams to a temp file to handle very large
+// genesis files (200-300MB+).
+func (f *Fetcher) getGenesisBlockFromURL(ctx context.Context) (*bft_types.Block, error) {
+	tmpFile, err := os.CreateTemp("", "genesis-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("unable to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	// Download to temp file
+	if err := f.downloadGenesis(ctx, tmpFile); err != nil {
+		tmpFile.Close()
+		return nil, fmt.Errorf("unable to download genesis.json: %w", err)
+	}
+	tmpFile.Close()
+
+	data, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read downloaded genesis file: %w", err)
+	}
+
+	f.logger.Info("Genesis file downloaded", zap.Int("bytes", len(data)))
+
+	var genDoc bft_types.GenesisDoc
+	if err := amino.UnmarshalJSON(data, &genDoc); err != nil {
+		return nil, fmt.Errorf("unable to parse genesis.json: %w", err)
+	}
+
+	genesisState, ok := genDoc.AppState.(gnoland.GnoGenesisState)
+	if !ok {
+		return nil, fmt.Errorf("unknown genesis state kind '%T'", genDoc.AppState)
+	}
+
+	txs := make([]bft_types.Tx, len(genesisState.Txs))
+	for i, tx := range genesisState.Txs {
+		txs[i], err = amino.Marshal(tx.Tx)
+		if err != nil {
+			return nil, fmt.Errorf("unable to marshal genesis tx: %w", err)
+		}
+	}
+
+	block := &bft_types.Block{
+		Header: bft_types.Header{
+			NumTxs:   int64(len(txs)),
+			TotalTxs: int64(len(txs)),
+			Time:     genDoc.GenesisTime,
+			ChainID:  genDoc.ChainID,
+		},
+		Data: bft_types.Data{
+			Txs: txs,
+		},
+	}
+
+	return block, nil
+}
+
+// downloadGenesis downloads the genesis file from the configured URL,
+// streaming directly to the provided file to handle large payloads.
+func (f *Fetcher) downloadGenesis(ctx context.Context, dest *os.File) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.genesisURL, nil)
+	if err != nil {
+		return fmt.Errorf("unable to create request: %w", err)
+	}
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return fmt.Errorf("unable to call genesis URL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	// Use a 1MB buffer for efficient large file streaming
+	buf := make([]byte, 1024*1024)
+	if _, err := io.CopyBuffer(dest, resp.Body, buf); err != nil {
+		return fmt.Errorf("unable to write genesis file: %w", err)
+	}
+
+	return nil
 }

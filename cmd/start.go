@@ -40,6 +40,7 @@ type startCfg struct {
 
 	disableIntrospection bool
 	clearOnReset         bool
+	genesisURL           string
 }
 
 // newStartCmd creates the indexer start command
@@ -125,6 +126,13 @@ func (c *startCfg) registerFlags(fs *flag.FlagSet) {
 		false,
 		"clear all data from storage when the application resets",
 	)
+
+	fs.StringVar(
+		&c.genesisURL,
+		"genesis-url",
+		"",
+		"the URL to download genesis.json as fallback when RPC genesis call fails (for large genesis files)",
+	)
 }
 
 // exec executes the indexer start command
@@ -177,6 +185,7 @@ func (c *startCfg) exec(ctx context.Context) error {
 		fetch.WithMaxChunkSize(c.maxChunkSize),
 		fetch.WithClearOnReset(c.clearOnReset),
 		fetch.WithDBPath(c.dbPath),
+		fetch.WithGenesisURL(c.genesisURL),
 	)
 
 	// Create the JSON-RPC service

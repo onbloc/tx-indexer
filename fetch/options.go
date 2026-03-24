@@ -42,3 +42,11 @@ func WithDBPath(dbPath string) Option {
 		f.dbPath = dbPath
 	}
 }
+
+// WithGenesisURL sets the fallback URL to download genesis.json
+// when the RPC genesis call fails (e.g. for very large genesis files)
+func WithGenesisURL(url string) Option {
+	return func(f *Fetcher) {
+		f.genesisURL = url
+	}
+}

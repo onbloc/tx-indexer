@@ -3,12 +3,15 @@ package fetch
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gnolang/gno/gno.land/pkg/gnoland"
@@ -93,20 +96,9 @@ func (f *Fetcher) fetchGenesisData(ctx context.Context) error {
 
 	f.logger.Info("Fetching genesis")
 
-	block, err := getGenesisBlock(ctx, f.client)
+	block, err := f.getGenesisBlockFromURL(ctx)
 	if err != nil {
-		f.logger.Warn("RPC genesis fetch failed", zap.Error(err))
-
-		if f.genesisURL == "" {
-			return fmt.Errorf("failed to fetch genesis block via RPC and no genesis-url configured: %w", err)
-		}
-
-		f.logger.Info("Falling back to genesis URL", zap.String("url", f.genesisURL))
-
-		block, err = f.getGenesisBlockFromURL(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to fetch genesis block from URL: %w", err)
-		}
+		return fmt.Errorf("failed to fetch genesis block from URL: %w", err)
 	}
 
 	results, err := f.client.GetBlockResults(ctx, 0)
@@ -432,6 +424,17 @@ func (f *Fetcher) getGenesisBlockFromURL(ctx context.Context) (*bft_types.Block,
 
 	f.logger.Info("Genesis file downloaded", zap.Int("bytes", len(data)))
 
+	// Newer gno networks may emit genesis tx metadata fields that this
+	// indexer's pinned gno dependency does not yet know about (e.g. the
+	// "source" field on test-13). amino.UnmarshalJSON rejects unknown JSON
+	// fields outright, so strip any metadata key that GnoTxMetadata does not
+	// declare before handing the payload to amino. This keeps the indexer
+	// forward-compatible with genesis schema additions without a dep bump.
+	data, err = sanitizeGenesisTxMetadata(data)
+	if err != nil {
+		return nil, fmt.Errorf("unable to sanitize genesis.json: %w", err)
+	}
+
 	var genDoc bft_types.GenesisDoc
 	if err := amino.UnmarshalJSON(data, &genDoc); err != nil {
 		return nil, fmt.Errorf("unable to parse genesis.json: %w", err)
@@ -490,4 +493,105 @@ func (f *Fetcher) downloadGenesis(ctx context.Context, dest *os.File) error {
 	}
 
 	return nil
+}
+
+// sanitizeGenesisTxMetadata removes any per-tx metadata fields that the pinned
+// gnoland.GnoTxMetadata type does not declare. amino.UnmarshalJSON rejects
+// unknown JSON fields, so newer genesis files carrying extra metadata keys
+// (e.g. "source") would otherwise fail to parse. Unknown keys are dropped
+// rather than erroring, keeping the indexer forward-compatible. The rest of the
+// document (txs, app_state, validators, ...) is preserved verbatim.
+func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("unable to decode genesis document: %w", err)
+	}
+
+	appStateRaw, ok := doc["app_state"]
+	if !ok {
+		// Nothing to sanitize; return the input untouched.
+		return data, nil
+	}
+
+	var appState map[string]json.RawMessage
+	if err := json.Unmarshal(appStateRaw, &appState); err != nil {
+		return nil, fmt.Errorf("unable to decode app_state: %w", err)
+	}
+
+	txsRaw, ok := appState["txs"]
+	if !ok {
+		return data, nil
+	}
+
+	var txs []map[string]json.RawMessage
+	if err := json.Unmarshal(txsRaw, &txs); err != nil {
+		return nil, fmt.Errorf("unable to decode genesis txs: %w", err)
+	}
+
+	known := knownJSONFields(reflect.TypeOf(gnoland.GnoTxMetadata{}))
+
+	changed := false
+	for _, tx := range txs {
+		metaRaw, ok := tx["metadata"]
+		if !ok {
+			continue
+		}
+
+		var meta map[string]json.RawMessage
+		if err := json.Unmarshal(metaRaw, &meta); err != nil {
+			return nil, fmt.Errorf("unable to decode tx metadata: %w", err)
+		}
+
+		for key := range meta {
+			if !known[key] {
+				delete(meta, key)
+				changed = true
+			}
+		}
+
+		cleaned, err := json.Marshal(meta)
+		if err != nil {
+			return nil, fmt.Errorf("unable to re-encode tx metadata: %w", err)
+		}
+
+		tx["metadata"] = cleaned
+	}
+
+	if !changed {
+		// No unknown fields were present; avoid the cost of re-encoding the
+		// (potentially very large) document.
+		return data, nil
+	}
+
+	newTxs, err := json.Marshal(txs)
+	if err != nil {
+		return nil, fmt.Errorf("unable to re-encode genesis txs: %w", err)
+	}
+	appState["txs"] = newTxs
+
+	newAppState, err := json.Marshal(appState)
+	if err != nil {
+		return nil, fmt.Errorf("unable to re-encode app_state: %w", err)
+	}
+	doc["app_state"] = newAppState
+
+	return json.Marshal(doc)
+}
+
+// knownJSONFields returns the set of JSON field names declared by the given
+// struct type, derived from its `json` struct tags. The set is used as an
+// allow-list so that schema additions to the source type are picked up
+// automatically without touching this code.
+func knownJSONFields(t reflect.Type) map[string]bool {
+	fields := make(map[string]bool, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		name := strings.Split(tag, ",")[0]
+		if name == "" || name == "-" {
+			name = t.Field(i).Name
+		}
+		fields[name] = true
+	}
+
+	return fields
 }

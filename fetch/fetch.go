@@ -95,10 +95,20 @@ func (f *Fetcher) fetchGenesisData(ctx context.Context) error {
 	}
 
 	f.logger.Info("Fetching genesis")
-
-	block, err := f.getGenesisBlockFromURL(ctx)
+	block, err := getGenesisBlock(ctx, f.client)
 	if err != nil {
-		return fmt.Errorf("failed to fetch genesis block from URL: %w", err)
+		f.logger.Warn("RPC genesis fetch failed", zap.Error(err))
+
+		if f.genesisURL == "" {
+			return fmt.Errorf("failed to fetch genesis block via RPC and no genesis-url configured: %w", err)
+		}
+
+		f.logger.Info("Falling back to genesis URL", zap.String("url", f.genesisURL))
+
+		block, err = f.getGenesisBlockFromURL(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to fetch genesis block from URL: %w", err)
+		}
 	}
 
 	results, err := f.client.GetBlockResults(ctx, 0)

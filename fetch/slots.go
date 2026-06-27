@@ -60,6 +60,17 @@ func (s *slots) setChunk(index int, chunk *chunk) {
 	s.Queue[index] = item
 }
 
+func (s *slots) removeSlot(index int) *slot {
+	item := s.getSlot(index)
+	if item == nil {
+		return nil
+	}
+
+	s.Queue = append(s.Queue[:index], s.Queue[index+1:]...)
+
+	return item
+}
+
 // reserveChunkRanges reserves empty chunk ranges, and returns them, if any
 func (s *slots) reserveChunkRanges(start, end uint64, maxChunkSize int64) []chunkRange {
 	freeSlots := s.maxSlots - s.Len()

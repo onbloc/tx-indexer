@@ -264,6 +264,12 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 					"error encountered during chunk fetch",
 					zap.String("error", response.error.Error()),
 				)
+
+				if !hasCompleteBlockRange(response.chunk, response.chunkRange) {
+					f.chunkBuffer.removeSlot(index)
+
+					continue
+				}
 			}
 
 			// Save the chunk
@@ -290,6 +296,10 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 }
 
 func (f *Fetcher) writeSlot(s *slot) error {
+	if err := validateSlot(s); err != nil {
+		return err
+	}
+
 	wb := f.storage.WriteBatch()
 
 	// Save the fetched data
@@ -355,6 +365,54 @@ func (f *Fetcher) writeSlot(s *slot) error {
 	f.latestChunkSize = len(s.chunk.blocks)
 
 	return nil
+}
+
+func validateSlot(s *slot) error {
+	if s == nil || s.chunk == nil {
+		return errors.New("empty slot")
+	}
+
+	if !hasCompleteBlockRange(s.chunk, s.chunkRange) {
+		return fmt.Errorf(
+			"partial block chunk for range [%d,%d]: expected %d blocks, got %d",
+			s.chunkRange.from,
+			s.chunkRange.to,
+			int(s.chunkRange.to-s.chunkRange.from+1),
+			len(s.chunk.blocks),
+		)
+	}
+
+	if len(s.chunk.results) != len(s.chunk.blocks) {
+		return fmt.Errorf(
+			"partial tx result chunk for range [%d,%d]: expected %d result sets, got %d",
+			s.chunkRange.from,
+			s.chunkRange.to,
+			len(s.chunk.blocks),
+			len(s.chunk.results),
+		)
+	}
+
+	return nil
+}
+
+func hasCompleteBlockRange(c *chunk, r chunkRange) bool {
+	if c == nil {
+		return false
+	}
+
+	expectedBlockCount := int(r.to - r.from + 1)
+	if len(c.blocks) != expectedBlockCount {
+		return false
+	}
+
+	for index, block := range c.blocks {
+		expectedHeight := int64(r.from) + int64(index)
+		if block == nil || block.Height != expectedHeight {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (f *Fetcher) IsReady(ctx context.Context) (bool, error) {

@@ -32,15 +32,14 @@ type startCfg struct {
 	remote        string
 	dbPath        string
 	logLevel      string
+	genesisURL    string
 
-	maxSlots     int
 	maxChunkSize int64
-
-	rateLimit int
+	maxSlots     int
+	rateLimit    int
 
 	disableIntrospection bool
 	clearOnReset         bool
-	genesisURL           string
 }
 
 // newStartCmd creates the indexer start command

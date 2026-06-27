@@ -1096,8 +1096,10 @@ func TestFetcher_RetriesPartialBlockFetch(t *testing.T) {
 		},
 		getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
 			attemptsMu.Lock()
+
 			attempts[num]++
 			currentAttempt := attempts[num]
+
 			attemptsMu.Unlock()
 
 			if num == 3 && currentAttempt == 1 {
@@ -1128,7 +1130,9 @@ func TestFetcher_RetriesPartialBlockFetch(t *testing.T) {
 	}
 
 	attemptsMu.Lock()
+
 	blockThreeAttempts := attempts[3]
+
 	attemptsMu.Unlock()
 
 	require.Equal(t, 2, blockThreeAttempts)

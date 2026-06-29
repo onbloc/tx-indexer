@@ -175,8 +175,25 @@ func getTxResultFromBatch(ctx context.Context, blocks []*types.Block, client Cli
 		}
 
 		height := results.Height
+		blockIndex, ok := indexOfBlockHeight[height]
+		if !ok {
+			return fetchedResults, fmt.Errorf("unexpected tx results for block %d", height)
+		}
+
+		if results.Results == nil {
+			return fetchedResults, fmt.Errorf("nil tx results for block %d", height)
+		}
+
+		block := blocks[blockIndex]
 		deliverTxs := results.Results.DeliverTxs
-		blockIndex := indexOfBlockHeight[height]
+		if len(deliverTxs) != int(block.NumTxs) {
+			return fetchedResults, fmt.Errorf(
+				"partial tx results for block %d: expected %d, got %d",
+				height,
+				block.NumTxs,
+				len(deliverTxs),
+			)
+		}
 
 		txResults := make([]*types.TxResult, blocks[blockIndex].NumTxs)
 
@@ -225,6 +242,27 @@ func getTxResultsSequentially(ctx context.Context, blocks []*types.Block, client
 		}
 
 		// Save the transaction result
+		if blockResults.Results == nil {
+			errs = append(errs, fmt.Errorf("nil tx results for block %d", block.Height))
+
+			continue
+		}
+
+		deliverTxs := blockResults.Results.DeliverTxs
+		if len(deliverTxs) != int(block.NumTxs) {
+			errs = append(
+				errs,
+				fmt.Errorf(
+					"partial tx results for block %d: expected %d, got %d",
+					block.Height,
+					block.NumTxs,
+					len(deliverTxs),
+				),
+			)
+
+			continue
+		}
+
 		txResults := make([]*types.TxResult, block.NumTxs)
 
 		for index, tx := range block.Txs {
@@ -232,7 +270,7 @@ func getTxResultsSequentially(ctx context.Context, blocks []*types.Block, client
 				Height:   block.Height,
 				Index:    uint32(index),
 				Tx:       tx,
-				Response: blockResults.Results.DeliverTxs[index],
+				Response: deliverTxs[index],
 			}
 
 			txResults[index] = result

@@ -45,6 +45,7 @@ type Fetcher struct {
 	maxSlots        int
 	maxChunkSize    int64
 	latestChunkSize int
+	gapScanHeight   uint64
 	queryInterval   time.Duration // block query interval
 	clearOnReset    bool
 }
@@ -182,12 +183,6 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 			return nil
 		}
 
-		// Check if there is a block gap
-		if latestRemote == latestLocal {
-			// No gap, nothing to sync
-			return nil
-		}
-
 		// Check if there is reset chains
 		if latestRemote < latestLocal {
 			if f.clearOnReset {
@@ -201,11 +196,32 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 			return nil
 		}
 
-		gaps := f.chunkBuffer.reserveChunkRanges(
-			latestLocal+1,
-			latestRemote,
-			f.maxChunkSize,
-		)
+		gaps := make([]chunkRange, 0, f.maxSlots)
+		if latestRemote == latestLocal {
+			localGap, hasLocalGap, err := f.findMissingLocalBlockRange(latestLocal)
+			if err != nil {
+				return err
+			}
+
+			if !hasLocalGap {
+				// No gap, nothing to sync
+				return nil
+			}
+
+			gaps = append(gaps, f.chunkBuffer.reserveChunkRanges(
+				localGap.from,
+				localGap.to,
+				f.maxChunkSize,
+			)...)
+		}
+
+		if latestRemote > latestLocal {
+			gaps = append(gaps, f.chunkBuffer.reserveChunkRanges(
+				latestLocal+1,
+				latestRemote,
+				f.maxChunkSize,
+			)...)
+		}
 
 		for _, gap := range gaps {
 			f.logger.Info(
@@ -239,7 +255,6 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			f.logger.Info("Fetcher service shut down")
-			close(collectorCh)
 
 			return nil
 		case <-ticker.C:
@@ -261,12 +276,17 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 					"error encountered during chunk fetch",
 					zap.String("error", response.error.Error()),
 				)
+			}
 
-				if !hasCompleteBlockRange(response.chunk, response.chunkRange) {
-					f.chunkBuffer.removeSlot(index)
+			responseSlot := &slot{
+				chunk:      response.chunk,
+				chunkRange: response.chunkRange,
+			}
+			if err := validateSlot(responseSlot); err != nil {
+				f.logger.Warn("discarding incomplete chunk", zap.Error(err))
+				f.chunkBuffer.removeSlot(index)
 
-					continue
-				}
+				continue
 			}
 
 			// Save the chunk
@@ -346,8 +366,7 @@ func (f *Fetcher) writeSlot(s *slot) error {
 		zap.Uint64("to", s.chunkRange.to),
 	)
 
-	// Save the latest height data
-	if err := wb.SetLatestHeight(s.chunkRange.to); err != nil {
+	if err := f.setLatestHeight(wb, s.chunkRange.to); err != nil {
 		if rErr := wb.Rollback(); rErr != nil {
 			return fmt.Errorf("unable to save latest height info, %w, %w", err, rErr)
 		}
@@ -362,6 +381,70 @@ func (f *Fetcher) writeSlot(s *slot) error {
 	f.latestChunkSize = len(s.chunk.blocks)
 
 	return nil
+}
+
+func (f *Fetcher) setLatestHeight(wb storage.Batch, height uint64) error {
+	latest, err := f.storage.GetLatestHeight()
+	if err != nil && !errors.Is(err, storageErrors.ErrNotFound) {
+		return fmt.Errorf("unable to fetch latest block height, %w", err)
+	}
+
+	if err == nil && latest > height {
+		return nil
+	}
+
+	return wb.SetLatestHeight(height)
+}
+
+func (f *Fetcher) findMissingLocalBlockRange(latestLocal uint64) (chunkRange, bool, error) {
+	if latestLocal == 0 {
+		return chunkRange{}, false, nil
+	}
+
+	if f.gapScanHeight == 0 {
+		f.gapScanHeight = 1
+	}
+
+	if f.gapScanHeight > latestLocal {
+		return chunkRange{}, false, nil
+	}
+
+	maxScanSize := uint64(f.maxChunkSize)
+	if maxScanSize == 0 {
+		maxScanSize = 1
+	}
+
+	start := f.gapScanHeight
+	end := min(latestLocal, start+maxScanSize-1)
+
+	for height := start; height <= end; height++ {
+		if _, err := f.storage.GetBlock(height); err == nil {
+			continue
+		} else if !errors.Is(err, storageErrors.ErrNotFound) {
+			return chunkRange{}, false, fmt.Errorf("unable to check local block %d, %w", height, err)
+		}
+
+		gap := chunkRange{
+			from: height,
+			to:   height,
+		}
+
+		for next := height + 1; next <= end; next++ {
+			if _, err := f.storage.GetBlock(next); err == nil {
+				break
+			} else if !errors.Is(err, storageErrors.ErrNotFound) {
+				return chunkRange{}, false, fmt.Errorf("unable to check local block %d, %w", next, err)
+			}
+
+			gap.to = next
+		}
+
+		return gap, true, nil
+	}
+
+	f.gapScanHeight = end + 1
+
+	return chunkRange{}, false, nil
 }
 
 func validateSlot(s *slot) error {
@@ -387,6 +470,31 @@ func validateSlot(s *slot) error {
 			len(s.chunk.blocks),
 			len(s.chunk.results),
 		)
+	}
+
+	for blockIndex, block := range s.chunk.blocks {
+		expectedTxCount := int(block.NumTxs)
+		if block.NumTxs < 0 {
+			return fmt.Errorf("invalid tx count for block %d: %d", block.Height, block.NumTxs)
+		}
+
+		if len(block.Txs) != expectedTxCount {
+			return fmt.Errorf(
+				"partial tx chunk for block %d: expected %d txs, got %d",
+				block.Height,
+				expectedTxCount,
+				len(block.Txs),
+			)
+		}
+
+		if len(s.chunk.results[blockIndex]) != expectedTxCount {
+			return fmt.Errorf(
+				"partial tx result chunk for block %d: expected %d tx results, got %d",
+				block.Height,
+				expectedTxCount,
+				len(s.chunk.results[blockIndex]),
+			)
+		}
 	}
 
 	return nil

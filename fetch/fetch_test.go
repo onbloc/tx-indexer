@@ -929,6 +929,9 @@ func TestFetcher_InvalidBlocks(t *testing.T) {
 		txs      = generateTransactions(t, txCount)
 		blocks   = generateBlocks(t, blockNum+1, txs)
 
+		attemptsMu     sync.Mutex
+		resultAttempts = map[uint64]int{}
+
 		savedBlocks    = make([]*types.Block, 0, blockNum)
 		capturedEvents = make([]*indexerTypes.NewBlock, 0)
 
@@ -1004,6 +1007,15 @@ func TestFetcher_InvalidBlocks(t *testing.T) {
 
 				require.LessOrEqual(t, num, uint64(blockNum))
 
+				attemptsMu.Lock()
+
+				resultAttempts[num]++
+				if num == 1 && resultAttempts[num] == 2 {
+					cancelFn()
+				}
+
+				attemptsMu.Unlock()
+
 				return nil, fmt.Errorf("unable to fetch result for block %d", num)
 			},
 			getGenesisFn: func() (*core_types.ResultGenesis, error) {
@@ -1029,10 +1041,16 @@ func TestFetcher_InvalidBlocks(t *testing.T) {
 	// Run the fetch
 	require.NoError(t, f.FetchChainData(ctx))
 
-	// Make sure correct blocks were attempted to be saved
-	for blockIndex := 1; blockIndex < blockNum; blockIndex++ {
-		assert.Equal(t, blocks[blockIndex], savedBlocks[blockIndex])
-	}
+	require.Len(t, savedBlocks, 1)
+	assert.EqualValues(t, 0, savedBlocks[0].Height)
+
+	attemptsMu.Lock()
+
+	blockOneAttempts := resultAttempts[1]
+
+	attemptsMu.Unlock()
+
+	assert.GreaterOrEqual(t, blockOneAttempts, 2)
 
 	// Make sure no events were emitted
 	assert.Len(t, capturedEvents, 0)
@@ -1136,6 +1154,226 @@ func TestFetcher_RetriesPartialBlockFetch(t *testing.T) {
 	attemptsMu.Unlock()
 
 	require.Equal(t, 2, blockThreeAttempts)
+}
+
+func TestFetcher_RetriesPartialTxResults(t *testing.T) {
+	t.Parallel()
+
+	var (
+		blockNum = 5
+		txs      = generateTransactions(t, 1)
+		blocks   = generateBlocks(t, blockNum+1, txs)
+
+		attemptsMu     sync.Mutex
+		resultAttempts = map[uint64]int{}
+
+		savedBlocks = make([]*types.Block, 0, blockNum)
+		savedTxs    = make([]*types.TxResult, 0, blockNum)
+		latestSaved = uint64(0)
+
+		mockEvents = &mockEvents{}
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mockStorage := &mock.Storage{
+		GetLatestSavedHeightFn: func() (uint64, error) {
+			return latestSaved, nil
+		},
+		GetWriteBatchFn: func() storage.Batch {
+			return &mock.WriteBatch{
+				SetBlockFn: func(block *types.Block) error {
+					savedBlocks = append(savedBlocks, block)
+
+					return nil
+				},
+				SetTxFn: func(result *types.TxResult) error {
+					savedTxs = append(savedTxs, result)
+
+					return nil
+				},
+				SetLatestHeightFn: func(height uint64) error {
+					latestSaved = height
+					if height == uint64(blockNum) {
+						cancel()
+					}
+
+					return nil
+				},
+			}
+		},
+	}
+
+	mockClient := &mockClient{
+		createBatchFn: func() clientTypes.Batch {
+			return &mockBatch{
+				executeFn: func(_ context.Context) ([]any, error) {
+					return nil, errors.New("batch unavailable")
+				},
+				countFn: func() int {
+					return 1
+				},
+			}
+		},
+		getLatestBlockNumberFn: func() (uint64, error) {
+			return uint64(blockNum), nil
+		},
+		getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
+			return &core_types.ResultBlock{
+				Block: blocks[num],
+			}, nil
+		},
+		getBlockResultsFn: func(num uint64) (*core_types.ResultBlockResults, error) {
+			attemptsMu.Lock()
+
+			resultAttempts[num]++
+			currentAttempt := resultAttempts[num]
+
+			attemptsMu.Unlock()
+
+			deliverTxs := make([]abci.ResponseDeliverTx, len(txs))
+			if num == 3 && currentAttempt == 1 {
+				deliverTxs = make([]abci.ResponseDeliverTx, 0)
+			}
+
+			return &core_types.ResultBlockResults{
+				Height: int64(num),
+				Results: &state.ABCIResponses{
+					DeliverTxs: deliverTxs,
+				},
+			}, nil
+		},
+	}
+
+	f := New(
+		mockStorage,
+		mockClient,
+		mockEvents,
+		WithMaxSlots(1),
+		WithMaxChunkSize(int64(blockNum)),
+	)
+	f.queryInterval = time.Millisecond
+
+	require.NoError(t, f.FetchChainData(ctx))
+	require.Equal(t, uint64(blockNum), latestSaved)
+	require.Len(t, savedBlocks, blockNum)
+	require.Len(t, savedTxs, blockNum)
+
+	attemptsMu.Lock()
+
+	blockThreeAttempts := resultAttempts[3]
+
+	attemptsMu.Unlock()
+
+	require.Equal(t, 2, blockThreeAttempts)
+}
+
+func TestFetcher_RecoversMissingLocalBlock_whenLatestAlreadyAdvanced(t *testing.T) {
+	t.Parallel()
+
+	var (
+		blockNum = 5
+		blocks   = generateBlocks(t, blockNum+1, []*std.Tx{})
+
+		localMu     sync.Mutex
+		localBlocks = map[uint64]*types.Block{
+			1: blocks[1],
+			2: blocks[2],
+			4: blocks[4],
+			5: blocks[5],
+		}
+
+		remoteAttempts = map[uint64]int{}
+		latestSaved    = uint64(blockNum)
+		latestWrites   = make([]uint64, 0)
+
+		mockEvents = &mockEvents{}
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	mockStorage := &mock.Storage{
+		GetLatestSavedHeightFn: func() (uint64, error) {
+			return latestSaved, nil
+		},
+		GetBlockFn: func(height uint64) (*types.Block, error) {
+			localMu.Lock()
+			defer localMu.Unlock()
+
+			block, ok := localBlocks[height]
+			if !ok {
+				return nil, storageErrors.ErrNotFound
+			}
+
+			return block, nil
+		},
+		GetWriteBatchFn: func() storage.Batch {
+			return &mock.WriteBatch{
+				SetBlockFn: func(block *types.Block) error {
+					localMu.Lock()
+					localBlocks[uint64(block.Height)] = block
+					localMu.Unlock()
+
+					if block.Height == 3 {
+						cancel()
+					}
+
+					return nil
+				},
+				SetLatestHeightFn: func(height uint64) error {
+					latestWrites = append(latestWrites, height)
+					latestSaved = height
+
+					return nil
+				},
+			}
+		},
+	}
+
+	mockClient := &mockClient{
+		createBatchFn: func() clientTypes.Batch {
+			return &mockBatch{
+				executeFn: func(_ context.Context) ([]any, error) {
+					return nil, errors.New("batch unavailable")
+				},
+				countFn: func() int {
+					return 1
+				},
+			}
+		},
+		getLatestBlockNumberFn: func() (uint64, error) {
+			return uint64(blockNum), nil
+		},
+		getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
+			remoteAttempts[num]++
+
+			return &core_types.ResultBlock{
+				Block: blocks[num],
+			}, nil
+		},
+	}
+
+	f := New(
+		mockStorage,
+		mockClient,
+		mockEvents,
+		WithMaxSlots(1),
+		WithMaxChunkSize(int64(blockNum)),
+	)
+	f.queryInterval = time.Millisecond
+
+	require.NoError(t, f.FetchChainData(ctx))
+
+	localMu.Lock()
+	recoveredBlock := localBlocks[3]
+	localMu.Unlock()
+
+	require.Equal(t, blocks[3], recoveredBlock)
+	require.Equal(t, 1, remoteAttempts[3])
+	require.Empty(t, latestWrites)
+	require.Equal(t, uint64(blockNum), latestSaved)
 }
 
 func TestFetcher_Genesis(t *testing.T) {

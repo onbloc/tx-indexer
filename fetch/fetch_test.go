@@ -992,18 +992,22 @@ func TestFetcher_InvalidBlocks(t *testing.T) {
 				}, nil
 			},
 			getBlockResultsFn: func(num uint64) (*core_types.ResultBlockResults, error) {
-				if num == 0 {
-					return &core_types.ResultBlockResults{
-						Height: int64(num),
-						Results: &state.ABCIResponses{
-							DeliverTxs: make([]abci.ResponseDeliverTx, 0),
-						},
-					}, nil
-				}
-
 				require.LessOrEqual(t, num, uint64(blockNum))
 
-				return nil, fmt.Errorf("unable to fetch result for block %d", num)
+				// Results are fetched successfully; the failure under test is
+				// the block *save* failing (see SetBlockFn), which models a
+				// legacy amino-incompatible block being skipped.
+				deliverTxCount := txCount
+				if num == 0 {
+					deliverTxCount = 0
+				}
+
+				return &core_types.ResultBlockResults{
+					Height: int64(num),
+					Results: &state.ABCIResponses{
+						DeliverTxs: make([]abci.ResponseDeliverTx, deliverTxCount),
+					},
+				}, nil
 			},
 			getGenesisFn: func() (*core_types.ResultGenesis, error) {
 				return &core_types.ResultGenesis{

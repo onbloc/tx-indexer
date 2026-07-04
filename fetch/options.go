@@ -1,6 +1,10 @@
 package fetch
 
-import "go.uber.org/zap"
+import (
+	"time"
+
+	"go.uber.org/zap"
+)
 
 type Option func(f *Fetcher)
 
@@ -48,5 +52,43 @@ func WithDBPath(dbPath string) Option {
 func WithGenesisURL(url string) Option {
 	return func(f *Fetcher) {
 		f.genesisURL = url
+	}
+}
+
+// WithChunkFetchRetry configures how failed block / tx-result fetches are retried.
+// Only the heights that fail are retried; already-fetched blocks are kept.
+// maxRetries is the number of retry rounds, each preceded by delay.
+func WithChunkFetchRetry(maxRetries int, delay time.Duration) Option {
+	return func(f *Fetcher) {
+		f.retry = retryConfig{
+			maxRetries: maxRetries,
+			retryDelay: delay,
+		}
+	}
+}
+
+// WithBackfillInterval sets how often the backfiller drains queued gaps.
+// A non-positive interval disables the backfiller entirely.
+func WithBackfillInterval(interval time.Duration) Option {
+	return func(f *Fetcher) {
+		f.backfillInterval = interval
+	}
+}
+
+// WithStartupAudit controls whether the backfiller scans existing storage for
+// missing-block gaps on startup.
+func WithStartupAudit(enabled bool) Option {
+	return func(f *Fetcher) {
+		f.auditOnStart = enabled
+	}
+}
+
+// WithTxAudit controls whether the startup audit also queues blocks
+// that are stored but missing some or all of their transactions.
+// It must decode every block to read the declared tx count,
+// so it is much more expensive than the plain missing-block audit and is opt-in.
+func WithTxAudit(enabled bool) Option {
+	return func(f *Fetcher) {
+		f.txAudit = enabled
 	}
 }

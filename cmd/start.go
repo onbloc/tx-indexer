@@ -186,6 +186,9 @@ func (c *startCfg) exec(ctx context.Context) error {
 		fetch.WithClearOnReset(c.clearOnReset),
 		fetch.WithDBPath(c.dbPath),
 		fetch.WithGenesisURL(c.genesisURL),
+		fetch.WithBackfillInterval(fetch.DefaultBackfillInterval),
+		fetch.WithStartupAudit(true),
+		fetch.WithTxAudit(true),
 	)
 
 	// Create the JSON-RPC service

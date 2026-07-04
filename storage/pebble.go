@@ -189,6 +189,19 @@ func (s *Pebble) BlockIterator(fromBlockNum, toBlockNum uint64) (Iterator[*types
 	return &PebbleBlockIter{pebbleBaseBlockIter: pebbleBaseBlockIter{i: it, s: snap}}, nil
 }
 
+// BlockHeightIterator iterates over stored block heights, reading each height
+// from the key without decoding the (potentially large) block value. This is
+// far cheaper than BlockIterator for height-only scans (e.g. gap detection),
+// and robust to nil / corrupt values since the value is never touched.
+func (s *Pebble) BlockHeightIterator(fromBlockNum, toBlockNum uint64) (Iterator[uint64], error) {
+	it, snap, err := s.loadBlockIterator(fromBlockNum, toBlockNum)
+	if err != nil {
+		return nil, err
+	}
+
+	return &PebbleBlockHeightIter{i: it, s: snap}, nil
+}
+
 func (s *Pebble) BlockReverseIterator(fromBlockNum, toBlockNum uint64) (Iterator[*types.Block], error) {
 	fromKey := keyBlock(fromBlockNum)
 
@@ -361,6 +374,51 @@ func (pi *PebbleReverseBlockIter) Next() bool {
 	}
 
 	return pi.i.Valid() && pi.i.Prev()
+}
+
+var _ Iterator[uint64] = &PebbleBlockHeightIter{}
+
+// PebbleBlockHeightIter iterates over block heights, decoding the height from
+// the key only (never the block value).
+type PebbleBlockHeightIter struct {
+	i    *pebble.Iterator
+	s    *pebble.Snapshot
+	init bool
+}
+
+func (pi *PebbleBlockHeightIter) Next() bool {
+	if !pi.init {
+		pi.init = true
+
+		return pi.i.First()
+	}
+
+	return pi.i.Valid() && pi.i.Next()
+}
+
+func (pi *PebbleBlockHeightIter) Value() (uint64, error) {
+	var buf []byte
+
+	// Strip the block key prefix, then decode the height
+	key, _, err := decodeUnsafeStringAscending(pi.i.Key(), buf)
+	if err != nil {
+		return 0, err
+	}
+
+	_, height, err := decodeUint64Ascending(key)
+	if err != nil {
+		return 0, err
+	}
+
+	return height, nil
+}
+
+func (pi *PebbleBlockHeightIter) Error() error {
+	return pi.i.Error()
+}
+
+func (pi *PebbleBlockHeightIter) Close() error {
+	return multierr.Append(pi.i.Close(), pi.s.Close())
 }
 
 type pebbleBaseTxIter struct {

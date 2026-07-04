@@ -32,15 +32,18 @@ type startCfg struct {
 	remote        string
 	dbPath        string
 	logLevel      string
+	genesisURL    string
 
-	maxSlots     int
-	maxChunkSize int64
-
-	rateLimit int
+	maxSlots        int
+	maxChunkSize    int64
+	rateLimit       int
+	auditFromHeight uint64
+	txAuditWindow   int
+	txAuditNap      time.Duration
 
 	disableIntrospection bool
 	clearOnReset         bool
-	genesisURL           string
+	txAudit              bool
 }
 
 // newStartCmd creates the indexer start command
@@ -133,6 +136,34 @@ func (c *startCfg) registerFlags(fs *flag.FlagSet) {
 		"",
 		"the URL to download genesis.json as fallback when RPC genesis call fails (for large genesis files)",
 	)
+
+	fs.BoolVar(
+		&c.txAudit,
+		"tx-audit",
+		false,
+		"on startup, scan stored blocks for missing transactions and backfill them (expensive; decodes every block in range)",
+	)
+
+	fs.Uint64Var(
+		&c.auditFromHeight,
+		"audit-from-height",
+		0,
+		"limit startup audits to heights >= this value (0 audits from genesis)",
+	)
+
+	fs.IntVar(
+		&c.txAuditWindow,
+		"tx-audit-window",
+		fetch.DefaultTxAuditWindow,
+		"heights processed per tx-audit window before pausing (throttle + resume granularity)",
+	)
+
+	fs.DurationVar(
+		&c.txAuditNap,
+		"tx-audit-nap",
+		fetch.DefaultTxAuditNap,
+		"pause between tx-audit windows; larger values lower the audit's CPU share",
+	)
 }
 
 // exec executes the indexer start command
@@ -186,6 +217,11 @@ func (c *startCfg) exec(ctx context.Context) error {
 		fetch.WithClearOnReset(c.clearOnReset),
 		fetch.WithDBPath(c.dbPath),
 		fetch.WithGenesisURL(c.genesisURL),
+		fetch.WithBackfillInterval(fetch.DefaultBackfillInterval),
+		fetch.WithStartupAudit(true),
+		fetch.WithTxAudit(c.txAudit),
+		fetch.WithAuditFromHeight(c.auditFromHeight),
+		fetch.WithTxAuditThrottle(c.txAuditWindow, c.txAuditNap),
 	)
 
 	// Create the JSON-RPC service

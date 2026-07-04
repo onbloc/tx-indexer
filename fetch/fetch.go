@@ -32,6 +32,14 @@ const (
 	// DefaultBackfillInterval is how often the backfiller drains queued gaps
 	// (heights that failed to fetch / save) and re-fetches them.
 	DefaultBackfillInterval = 30 * time.Second
+
+	// DefaultTxAuditWindow is how many heights the tx-completeness audit
+	// processes before pausing (throttle + watermark granularity).
+	DefaultTxAuditWindow = 20_000
+
+	// DefaultTxAuditNap is the pause between tx-audit windows,
+	// which caps how much of the CPU the audit takes on constrained deployments.
+	DefaultTxAuditNap = 100 * time.Millisecond
 )
 
 var errInvalidGenesisState = errors.New("invalid genesis state")
@@ -57,6 +65,9 @@ type Fetcher struct {
 	backfillInterval time.Duration // how often queued gaps are re-fetched
 	auditOnStart     bool          // scan storage for missing-block gaps on startup
 	txAudit          bool          // also scan for blocks with missing txs on startup (expensive)
+	auditFromHeight  uint64        // lower bound for both audits (skip heights below it)
+	txAuditWindow    int           // heights per tx-audit window (throttle + resume granularity)
+	txAuditNap       time.Duration // pause between tx-audit windows (throttle)
 
 	dbPath       string
 	clearOnReset bool
@@ -84,6 +95,8 @@ func New(
 		backfillInterval: 0,     // disabled unless explicitly enabled (see WithBackfillInterval)
 		auditOnStart:     false, // enabled alongside the backfiller in production wiring
 		txAudit:          false, // expensive tx-completeness scan, opt-in only
+		txAuditWindow:    DefaultTxAuditWindow,
+		txAuditNap:       DefaultTxAuditNap,
 	}
 
 	for _, opt := range opts {

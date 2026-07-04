@@ -65,8 +65,8 @@ const maxAuditGaps = 100_000
 // gapTracker is a thread-safe, de-duplicated set of block heights pending
 // backfill (because they failed to fetch or to save).
 type gapTracker struct {
-	mu  sync.Mutex
 	set map[uint64]struct{}
+	mu  sync.Mutex
 }
 
 func newGapTracker() *gapTracker {
@@ -164,14 +164,14 @@ func (f *Fetcher) auditGaps(ctx context.Context) error {
 		return fmt.Errorf("unable to read latest height for audit: %w", err)
 	}
 
-	it, err := f.blockHeights(0, latest)
+	it, err := f.blockHeights(f.auditFromHeight, latest)
 	if err != nil {
 		return fmt.Errorf("unable to open block height iterator for audit: %w", err)
 	}
 	defer it.Close()
 
 	var (
-		expected uint64 // next height we expect to see
+		expected = f.auditFromHeight // next height we expect to see
 		queued   int
 	)
 
@@ -188,6 +188,7 @@ func (f *Fetcher) auditGaps(ctx context.Context) error {
 		// Any heights between what we expected and this block are missing
 		for h := expected; h < height && queued < maxAuditGaps; h++ {
 			f.gaps.add(h)
+
 			queued++
 		}
 
@@ -201,6 +202,7 @@ func (f *Fetcher) auditGaps(ctx context.Context) error {
 	// Any heights between the last stored block and the latest height are missing
 	for h := expected; h <= latest && queued < maxAuditGaps; h++ {
 		f.gaps.add(h)
+
 		queued++
 	}
 
@@ -222,11 +224,26 @@ func (f *Fetcher) auditGaps(ctx context.Context) error {
 	return nil
 }
 
+// txAuditWatermark is an optional storage capability: persist how far the
+// tx-completeness audit has verified so it can resume across restarts instead
+// of re-scanning from the start.
+type txAuditWatermark interface {
+	GetTxAuditHeight() (uint64, error)
+	SetTxAuditHeight(uint64) error
+}
+
 // auditTxGaps queues every height whose stored transaction count is below the
 // block's declared NumTxs, recovering blocks saved without (some of) their txs.
-// It walks the block and transaction iterators together in a single height-
-// ordered pass. Decoding every block to read NumTxs makes it far more expensive
-// than auditGaps, hence opt-in.
+//
+// It is scoped to [auditFromHeight, latest] and processed in windows: each
+// window is audited with its own short-lived iterators (so the DB snapshot is
+// released between windows) and is followed by a nap, which caps the audit's
+// CPU share on constrained deployments. Progress is persisted per fully-audited
+// window (see txAuditWatermark), so a restart resumes instead of re-scanning —
+// and once the whole range is complete, later runs do almost nothing.
+//
+// Decoding every block to read NumTxs makes this far more expensive than
+// auditGaps, hence opt-in.
 func (f *Fetcher) auditTxGaps(ctx context.Context) error {
 	latest, err := f.storage.GetLatestHeight()
 	if err != nil {
@@ -237,34 +254,108 @@ func (f *Fetcher) auditTxGaps(ctx context.Context) error {
 		return fmt.Errorf("unable to read latest height for tx audit: %w", err)
 	}
 
-	blockIt, err := f.storage.BlockIterator(0, latest)
+	window := uint64(f.txAuditWindow)
+	if window == 0 {
+		window = DefaultTxAuditWindow
+	}
+
+	start := f.auditFromHeight
+	if resume := f.txAuditResumeHeight(); resume > start {
+		start = resume
+	}
+
+	var (
+		queued  int
+		blocked bool // once an incomplete height is found, stop advancing the watermark
+	)
+
+	for cur := start; cur <= latest; cur += window {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		end := cur + window - 1
+		if end > latest || end < cur { // clamp, and guard the cur+window overflow
+			end = latest
+		}
+
+		firstIncomplete, err := f.auditTxWindow(ctx, cur, end, &queued)
+		if err != nil {
+			return err
+		}
+
+		// Advance the durable watermark only while every audited height so far
+		// is complete; freeze it just below the first incomplete height so a
+		// restart re-checks it (and it advances again once backfill fills it).
+		if !blocked {
+			if firstIncomplete != nil {
+				blocked = true
+
+				if *firstIncomplete > 0 {
+					f.persistTxAuditHeight(*firstIncomplete - 1)
+				}
+			} else {
+				f.persistTxAuditHeight(end)
+			}
+		}
+
+		if end == latest || queued >= maxAuditGaps {
+			break // done (also avoids cur+window wrapping past the end)
+		}
+
+		// Throttle: pause between windows so the audit does not monopolise the CPU
+		if f.txAuditNap > 0 {
+			if err := sleepWithContext(ctx, f.txAuditNap); err != nil {
+				return err
+			}
+		}
+	}
+
+	if queued > 0 {
+		f.logger.Warn(
+			"tx audit found blocks with missing transactions, queued for backfill",
+			zap.Int("count", queued),
+			zap.Uint64("from", start),
+			zap.Uint64("latest", latest),
+		)
+	}
+
+	return nil
+}
+
+// auditTxWindow audits the tx-completeness of blocks in [from, to], queueing
+// any incomplete height, and returns the lowest incomplete height it found (or
+// nil). It walks the block and transaction iterators together in a single
+// height-ordered pass.
+func (f *Fetcher) auditTxWindow(ctx context.Context, from, to uint64, queued *int) (*uint64, error) {
+	blockIt, err := f.storage.BlockIterator(from, to)
 	if err != nil {
-		return fmt.Errorf("unable to open block iterator for tx audit: %w", err)
+		return nil, fmt.Errorf("unable to open block iterator for tx audit: %w", err)
 	}
 	defer blockIt.Close()
 
-	txIt, err := f.storage.TxIterator(0, latest, 0, math.MaxUint32)
+	txIt, err := f.storage.TxIterator(from, to, 0, math.MaxUint32)
 	if err != nil {
-		return fmt.Errorf("unable to open tx iterator for tx audit: %w", err)
+		return nil, fmt.Errorf("unable to open tx iterator for tx audit: %w", err)
 	}
 	defer txIt.Close()
 
 	// Prime the tx iterator with its first transaction (if any)
 	txHeight, txValid, err := nextTxHeight(txIt)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	queued := 0
+	var firstIncomplete *uint64
 
 	for blockIt.Next() {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 
 		block, err := blockIt.Value()
 		if err != nil {
-			return fmt.Errorf("unable to decode block during tx audit: %w", err)
+			return nil, fmt.Errorf("unable to decode block during tx audit: %w", err)
 		}
 
 		if block.NumTxs == 0 {
@@ -276,7 +367,7 @@ func (f *Fetcher) auditTxGaps(ctx context.Context) error {
 		// Skip any stray transactions that sit below this block's height
 		for txValid && txHeight < height {
 			if txHeight, txValid, err = nextTxHeight(txIt); err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -286,33 +377,62 @@ func (f *Fetcher) auditTxGaps(ctx context.Context) error {
 			stored++
 
 			if txHeight, txValid, err = nextTxHeight(txIt); err != nil {
-				return err
+				return nil, err
 			}
 		}
 
-		if stored < block.NumTxs && queued < maxAuditGaps {
-			f.gaps.add(height)
-			queued++
+		if stored < block.NumTxs {
+			if *queued < maxAuditGaps {
+				f.gaps.add(height)
+
+				*queued++
+			}
+
+			if firstIncomplete == nil {
+				h := height
+				firstIncomplete = &h
+			}
 		}
 	}
 
 	if err := blockIt.Error(); err != nil {
-		return fmt.Errorf("block iterator error during tx audit: %w", err)
+		return nil, fmt.Errorf("block iterator error during tx audit: %w", err)
 	}
 
 	if err := txIt.Error(); err != nil {
-		return fmt.Errorf("tx iterator error during tx audit: %w", err)
+		return nil, fmt.Errorf("tx iterator error during tx audit: %w", err)
 	}
 
-	if queued > 0 {
-		f.logger.Warn(
-			"tx audit found blocks with missing transactions, queued for backfill",
-			zap.Int("count", queued),
-			zap.Uint64("latest", latest),
-		)
+	return firstIncomplete, nil
+}
+
+// txAuditResumeHeight returns the height the tx audit should resume from (the
+// persisted watermark + 1), or 0 when there is no watermark / no support.
+func (f *Fetcher) txAuditResumeHeight() uint64 {
+	wm, ok := f.storage.(txAuditWatermark)
+	if !ok {
+		return 0
 	}
 
-	return nil
+	height, err := wm.GetTxAuditHeight()
+	if err != nil {
+		return 0 // not set yet, or a read error: start from the configured floor
+	}
+
+	return height + 1
+}
+
+// persistTxAuditHeight records how far the tx audit has verified, if the
+// storage supports it.
+func (f *Fetcher) persistTxAuditHeight(height uint64) {
+	wm, ok := f.storage.(txAuditWatermark)
+	if !ok {
+		return
+	}
+
+	if err := wm.SetTxAuditHeight(height); err != nil {
+		f.logger.Warn("unable to persist tx audit height", zap.Uint64("height", height), zap.Error(err))
+	}
 }
 
 // nextTxHeight advances the transaction iterator and returns the height of the
@@ -359,6 +479,7 @@ func (f *Fetcher) drainGaps(ctx context.Context) {
 		}
 
 		f.gaps.remove(height)
+
 		repaired++
 	}
 

@@ -48,20 +48,21 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 // workerInfo is the work context for the fetch routine
 type workerInfo struct {
 	resCh      chan<- *workerResponse
+	logger     *zap.Logger // may be nil
 	chunkRange chunkRange
 	retry      retryConfig
-	logger     *zap.Logger // may be nil
 }
 
 // workerResponse is the routine response
 type workerResponse struct {
-	error      error
-	chunk      *chunk
-	chunkRange chunkRange
+	error error
+	chunk *chunk
 
 	// missingBlocks are heights in the range still unavailable after retries,
 	// to be scheduled for backfill rather than skipped.
 	missingBlocks []uint64
+
+	chunkRange chunkRange
 }
 
 // handleChunk fetches the chunk, retrying failed heights so transient RPC
@@ -167,7 +168,9 @@ func fetchBlocksWithRetry(
 
 	// First pass: batch fetch (falls back to sequential internally), keeping
 	// whatever partial results come back.
-	blocks, _ := getBlocksFromBatch(ctx, r, client)
+	// The error is intentionally ignored:
+	// any heights missing from the partial result are retried below.
+	blocks, _ := getBlocksFromBatch(ctx, r, client) //nolint:errcheck // partial results retried below
 	for _, block := range blocks {
 		have[uint64(block.Height)] = block
 	}
@@ -226,13 +229,16 @@ func fetchResultsWithRetry(
 	retry retryConfig,
 	logger *zap.Logger,
 ) ([][]*types.TxResult, map[int]bool) {
-	// First pass: batch fetch (falls back to sequential internally)
-	results, _ := getTxResultFromBatch(ctx, blocks, client)
+	// First pass: batch fetch (falls back to sequential internally).
+	// The error is intentionally ignored:
+	// any blocks whose results are missing are retried below.
+	results, _ := getTxResultFromBatch(ctx, blocks, client) //nolint:errcheck // missing results retried below
 	if results == nil {
 		results = make([][]*types.TxResult, len(blocks))
 	}
 
 	incomplete := make(map[int]bool)
+
 	for i, block := range blocks {
 		if block.NumTxs > 0 && results[i] == nil {
 			incomplete[i] = true

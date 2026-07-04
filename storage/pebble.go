@@ -18,6 +18,11 @@ const (
 	// for the latest height saved in the DB
 	keyLatestHeight = "/meta/lh"
 
+	// keyTxAuditHeight is the highest height up to which the tx-completeness
+	// audit has verified stored blocks. It lets the audit resume across
+	// restarts instead of re-scanning from the start every time.
+	keyTxAuditHeight = "/meta/txah"
+
 	// prefixKeyBlocks is the key for each block saved. They are stored by height
 	prefixKeyBlocks = "/data/blocks/"
 
@@ -94,6 +99,34 @@ func (s *Pebble) GetLatestHeight() (uint64, error) {
 	_, val, err := decodeUint64Ascending(height)
 
 	return val, err
+}
+
+// GetTxAuditHeight returns the highest height the tx-completeness audit has
+// verified, or ErrNotFound if it has never run.
+func (s *Pebble) GetTxAuditHeight() (uint64, error) {
+	val, c, err := s.db.Get([]byte(keyTxAuditHeight))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return 0, storageErrors.ErrNotFound
+	}
+
+	if err != nil {
+		return 0, err
+	}
+
+	defer c.Close()
+
+	_, height, err := decodeUint64Ascending(val)
+
+	return height, err
+}
+
+// SetTxAuditHeight records how far the tx-completeness audit has verified.
+func (s *Pebble) SetTxAuditHeight(height uint64) error {
+	var val []byte
+
+	val = encodeUint64Ascending(val, height)
+
+	return s.db.Set([]byte(keyTxAuditHeight), val, pebble.Sync)
 }
 
 // GetBlock fetches the specified block from storage, if any

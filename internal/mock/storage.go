@@ -4,6 +4,7 @@ import (
 	"github.com/gnolang/gno/tm2/pkg/bft/types"
 
 	"github.com/gnolang/tx-indexer/storage"
+	storageErrors "github.com/gnolang/tx-indexer/storage/errors"
 )
 
 var _ storage.Storage = &Storage{}
@@ -16,6 +17,26 @@ type Storage struct {
 	GetTxByHashFn          func(string) (*types.TxResult, error)
 	BlockIteratorFn        func(uint64, uint64) (storage.Iterator[*types.Block], error)
 	TxIteratorFn           func(uint64, uint64, uint32, uint32) (storage.Iterator[*types.TxResult], error)
+	GetTxAuditHeightFn     func() (uint64, error)
+	SetTxAuditHeightFn     func(uint64) error
+}
+
+// GetTxAuditHeight returns the stored tx-audit watermark
+func (m *Storage) GetTxAuditHeight() (uint64, error) {
+	if m.GetTxAuditHeightFn != nil {
+		return m.GetTxAuditHeightFn()
+	}
+
+	return 0, storageErrors.ErrNotFound
+}
+
+// SetTxAuditHeight records the tx-audit watermark
+func (m *Storage) SetTxAuditHeight(height uint64) error {
+	if m.SetTxAuditHeightFn != nil {
+		return m.SetTxAuditHeightFn(height)
+	}
+
+	return nil
 }
 
 func (m *Storage) GetLatestHeight() (uint64, error) {

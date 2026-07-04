@@ -92,3 +92,25 @@ func WithTxAudit(enabled bool) Option {
 		f.txAudit = enabled
 	}
 }
+
+// WithAuditFromHeight limits both startup audits to heights >= from, skipping
+// everything below it. Use it to scan only the range affected by an incident
+// instead of the whole history.
+func WithAuditFromHeight(from uint64) Option {
+	return func(f *Fetcher) {
+		f.auditFromHeight = from
+	}
+}
+
+// WithTxAuditThrottle tunes the tx-completeness audit for constrained
+// deployments: it processes windowBlocks heights, then pauses for nap before
+// the next window. A smaller window and larger nap lower the audit's CPU share
+// (at the cost of a longer scan). The window is also the resume granularity:
+// progress is persisted per completed window so restarts continue instead of
+// re-scanning from the start.
+func WithTxAuditThrottle(windowBlocks int, nap time.Duration) Option {
+	return func(f *Fetcher) {
+		f.txAuditWindow = windowBlocks
+		f.txAuditNap = nap
+	}
+}

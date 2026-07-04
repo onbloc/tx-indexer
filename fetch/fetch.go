@@ -47,28 +47,24 @@ var errInvalidGenesisState = errors.New("invalid genesis state")
 // Fetcher is an instance of the block indexer
 // fetcher
 type Fetcher struct {
-	storage storage.Storage
-	client  Client
-	events  Events
-
+	storage     storage.Storage
+	client      Client
+	events      Events
 	logger      *zap.Logger
 	chunkBuffer *slots
+	gaps        *gapTracker // heights pending backfill (fetch or save failures)
+	dbPath      string
+	genesisURL  string // optional URL to download genesis.json as fallback
 
-	maxSlots        int
-	maxChunkSize    int64
-	latestChunkSize int
-
-	queryInterval time.Duration // block query interval
-
+	maxSlots         int
+	maxChunkSize     int64
+	latestChunkSize  int
+	queryInterval    time.Duration // block query interval
 	retry            retryConfig   // retry policy for failed block / tx fetches
-	gaps             *gapTracker   // heights pending backfill (fetch or save failures)
 	backfillInterval time.Duration // how often queued gaps are re-fetched
 	auditFromHeight  uint64        // lower bound for both audits (skip heights below it)
 	txAuditWindow    int           // heights per tx-audit window (throttle + resume granularity)
 	txAuditNap       time.Duration // pause between tx-audit windows (throttle)
-
-	dbPath     string
-	genesisURL string // optional URL to download genesis.json as fallback
 
 	clearOnReset bool // wipe storage when the chain resets
 	auditOnStart bool // scan storage for missing-block gaps on startup

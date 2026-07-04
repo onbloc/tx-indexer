@@ -124,6 +124,7 @@ func TestStorage_BlockHeightIterator(t *testing.T) {
 	for _, h := range heights {
 		require.NoError(t, b.SetBlock(&types.Block{Header: types.Header{Height: h}}))
 	}
+
 	require.NoError(t, b.Commit())
 
 	it, err := s.BlockHeightIterator(0, 7)
@@ -134,9 +135,11 @@ func TestStorage_BlockHeightIterator(t *testing.T) {
 	}()
 
 	var got []uint64
+
 	for it.Next() {
 		h, err := it.Value()
 		require.NoError(t, err)
+
 		got = append(got, h)
 	}
 

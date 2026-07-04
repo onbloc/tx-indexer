@@ -63,15 +63,16 @@ type Fetcher struct {
 	retry            retryConfig   // retry policy for failed block / tx fetches
 	gaps             *gapTracker   // heights pending backfill (fetch or save failures)
 	backfillInterval time.Duration // how often queued gaps are re-fetched
-	auditOnStart     bool          // scan storage for missing-block gaps on startup
-	txAudit          bool          // also scan for blocks with missing txs on startup (expensive)
 	auditFromHeight  uint64        // lower bound for both audits (skip heights below it)
 	txAuditWindow    int           // heights per tx-audit window (throttle + resume granularity)
 	txAuditNap       time.Duration // pause between tx-audit windows (throttle)
 
-	dbPath       string
-	clearOnReset bool
-	genesisURL   string // optional URL to download genesis.json as fallback
+	dbPath     string
+	genesisURL string // optional URL to download genesis.json as fallback
+
+	clearOnReset bool // wipe storage when the chain resets
+	auditOnStart bool // scan storage for missing-block gaps on startup
+	txAudit      bool // also scan for blocks with missing txs on startup (expensive)
 }
 
 // New creates a new data fetcher instance

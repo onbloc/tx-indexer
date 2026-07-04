@@ -65,21 +65,19 @@ func TestAuditGaps(t *testing.T) {
 	testTable := []struct {
 		name         string
 		stored       []int64
-		latest       uint64
 		latestErr    error
 		expectedGaps []uint64
+		latest       uint64
 	}{
-		{"nothing indexed yet", nil, 0, storageErrors.ErrNotFound, []uint64{}},
-		{"no gaps", []int64{0, 1, 2, 3}, 3, nil, []uint64{}},
-		{"leading gap", []int64{2, 3}, 3, nil, []uint64{0, 1}},
-		{"middle gaps", []int64{0, 1, 3, 5}, 5, nil, []uint64{2, 4}},
-		{"trailing gap", []int64{0, 1, 2}, 5, nil, []uint64{3, 4, 5}},
-		{"only genesis stored", []int64{0}, 3, nil, []uint64{1, 2, 3}},
+		{"nothing indexed yet", nil, storageErrors.ErrNotFound, []uint64{}, 0},
+		{"no gaps", []int64{0, 1, 2, 3}, nil, []uint64{}, 3},
+		{"leading gap", []int64{2, 3}, nil, []uint64{0, 1}, 3},
+		{"middle gaps", []int64{0, 1, 3, 5}, nil, []uint64{2, 4}, 5},
+		{"trailing gap", []int64{0, 1, 2}, nil, []uint64{3, 4, 5}, 5},
+		{"only genesis stored", []int64{0}, nil, []uint64{1, 2, 3}, 3},
 	}
 
 	for _, testCase := range testTable {
-		testCase := testCase
-
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -122,7 +120,12 @@ func newUint64SliceIter(vals []uint64) *uint64SliceIter {
 	return &uint64SliceIter{vals: vals, index: -1}
 }
 
-func (it *uint64SliceIter) Next() bool             { it.index++; return it.index < len(it.vals) }
+func (it *uint64SliceIter) Next() bool {
+	it.index++
+
+	return it.index < len(it.vals)
+}
+
 func (it *uint64SliceIter) Value() (uint64, error) { return it.vals[it.index], nil }
 func (it *uint64SliceIter) Error() error           { return nil }
 func (it *uint64SliceIter) Close() error           { return nil }
@@ -162,40 +165,46 @@ func TestAuditTxGaps(t *testing.T) {
 		name         string
 		blocks       []blockSpec
 		txHeights    []int64 // one entry per stored tx, ascending
-		latest       uint64
 		latestErr    error
 		expectedGaps []uint64
+		latest       uint64
 	}{
-		{"nothing indexed yet", nil, nil, 0, storageErrors.ErrNotFound, []uint64{}},
+		{"nothing indexed yet", nil, nil, storageErrors.ErrNotFound, []uint64{}, 0},
 		{
 			"all complete",
 			[]blockSpec{{1, 2}, {2, 1}},
 			[]int64{1, 1, 2},
-			2, nil, []uint64{},
+			nil,
+			[]uint64{},
+			2,
 		},
 		{
 			"partial and fully missing",
 			[]blockSpec{{1, 2}, {2, 2}, {3, 2}},
 			[]int64{1, 1, 2},
-			3, nil, []uint64{2, 3},
+			nil,
+			[]uint64{2, 3},
+			3,
 		},
 		{
 			"empty blocks are skipped",
 			[]blockSpec{{1, 0}, {2, 0}},
 			nil,
-			2, nil, []uint64{},
+			nil,
+			[]uint64{},
+			2,
 		},
 		{
 			"trailing block incomplete",
 			[]blockSpec{{1, 1}, {2, 2}},
 			[]int64{1, 2},
-			2, nil, []uint64{2},
+			nil,
+			[]uint64{2},
+			2,
 		},
 	}
 
 	for _, testCase := range testTable {
-		testCase := testCase
-
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -229,6 +238,156 @@ func TestAuditTxGaps(t *testing.T) {
 			assert.Equal(t, testCase.expectedGaps, f.gaps.snapshot())
 		})
 	}
+}
+
+// blocksInRange / txsInRange let the mock iterators honor the window bounds the
+// windowed tx audit passes in.
+func blocksInRange(blocks []*types.Block, from, to uint64) []*types.Block {
+	out := make([]*types.Block, 0, len(blocks))
+	for _, b := range blocks {
+		if uint64(b.Height) >= from && uint64(b.Height) <= to {
+			out = append(out, b)
+		}
+	}
+
+	return out
+}
+
+func txsInRange(txs []*types.TxResult, from, to uint64) []*types.TxResult {
+	out := make([]*types.TxResult, 0, len(txs))
+	for _, tx := range txs {
+		if uint64(tx.Height) >= from && uint64(tx.Height) <= to {
+			out = append(out, tx)
+		}
+	}
+
+	return out
+}
+
+// txAuditBlocks builds single-tx blocks at the given heights.
+func txAuditBlocks(heights ...int64) []*types.Block {
+	blocks := make([]*types.Block, len(heights))
+	for i, h := range heights {
+		blocks[i] = &types.Block{Header: types.Header{Height: h, NumTxs: 1}}
+	}
+
+	return blocks
+}
+
+func TestAuditTxGaps_HonorsFromHeight(t *testing.T) {
+	t.Parallel()
+
+	// Heights 1 and 3 declare a tx but none are stored (both incomplete).
+	blocks := txAuditBlocks(1, 3)
+
+	storageMock := &mock.Storage{
+		GetLatestSavedHeightFn: func() (uint64, error) { return 3, nil },
+		BlockIteratorFn: func(from, to uint64) (storage.Iterator[*types.Block], error) {
+			return mock.NewSliceBlockIterator(blocksInRange(blocks, from, to)), nil
+		},
+		TxIteratorFn: func(_, _ uint64, _, _ uint32) (storage.Iterator[*types.TxResult], error) {
+			return mock.NewSliceTxIterator(nil), nil
+		},
+	}
+
+	// Floor at height 2: height 1 must be skipped, only 3 is queued.
+	f := New(storageMock, &mockClient{}, &mockEvents{}, WithAuditFromHeight(2))
+
+	require.NoError(t, f.auditTxGaps(context.Background()))
+	assert.Equal(t, []uint64{3}, f.gaps.snapshot())
+}
+
+func TestAuditTxGaps_ResumesFromWatermark(t *testing.T) {
+	t.Parallel()
+
+	// All incomplete, but the watermark says heights <= 2 are already verified.
+	blocks := txAuditBlocks(1, 2, 3)
+	watermark := uint64(2)
+
+	storageMock := &mock.Storage{
+		GetLatestSavedHeightFn: func() (uint64, error) { return 3, nil },
+		BlockIteratorFn: func(from, to uint64) (storage.Iterator[*types.Block], error) {
+			return mock.NewSliceBlockIterator(blocksInRange(blocks, from, to)), nil
+		},
+		TxIteratorFn: func(_, _ uint64, _, _ uint32) (storage.Iterator[*types.TxResult], error) {
+			return mock.NewSliceTxIterator(nil), nil
+		},
+		GetTxAuditHeightFn: func() (uint64, error) { return watermark, nil },
+	}
+
+	f := New(storageMock, &mockClient{}, &mockEvents{})
+
+	require.NoError(t, f.auditTxGaps(context.Background()))
+	assert.Equal(t, []uint64{3}, f.gaps.snapshot(), "heights at or below the watermark must be skipped")
+}
+
+func TestAuditTxGaps_PersistsWatermarkPerWindow(t *testing.T) {
+	t.Parallel()
+
+	t.Run("advances to latest when everything is complete", func(t *testing.T) {
+		t.Parallel()
+
+		blocks := txAuditBlocks(1, 2, 3, 4)
+		txs := []*types.TxResult{{Height: 1}, {Height: 2}, {Height: 3}, {Height: 4}}
+
+		var persisted []uint64
+
+		storageMock := &mock.Storage{
+			GetLatestSavedHeightFn: func() (uint64, error) { return 4, nil },
+			BlockIteratorFn: func(from, to uint64) (storage.Iterator[*types.Block], error) {
+				return mock.NewSliceBlockIterator(blocksInRange(blocks, from, to)), nil
+			},
+			TxIteratorFn: func(from, to uint64, _, _ uint32) (storage.Iterator[*types.TxResult], error) {
+				return mock.NewSliceTxIterator(txsInRange(txs, from, to)), nil
+			},
+			SetTxAuditHeightFn: func(h uint64) error {
+				persisted = append(persisted, h)
+
+				return nil
+			},
+		}
+
+		// from height 1, window of 2 -> [1,2] then [3,4]
+		f := New(storageMock, &mockClient{}, &mockEvents{}, WithAuditFromHeight(1), WithTxAuditThrottle(2, 0))
+
+		require.NoError(t, f.auditTxGaps(context.Background()))
+		assert.Empty(t, f.gaps.snapshot())
+		assert.Equal(t, []uint64{2, 4}, persisted, "watermark advances per completed window")
+	})
+
+	t.Run("freezes just below the first incomplete height", func(t *testing.T) {
+		t.Parallel()
+
+		// Height 3 is incomplete; 1, 2, 4 are complete.
+		blocks := txAuditBlocks(1, 2, 3, 4)
+		txs := []*types.TxResult{{Height: 1}, {Height: 2}, {Height: 4}}
+
+		var persisted []uint64
+
+		storageMock := &mock.Storage{
+			GetLatestSavedHeightFn: func() (uint64, error) { return 4, nil },
+			BlockIteratorFn: func(from, to uint64) (storage.Iterator[*types.Block], error) {
+				return mock.NewSliceBlockIterator(blocksInRange(blocks, from, to)), nil
+			},
+			TxIteratorFn: func(from, to uint64, _, _ uint32) (storage.Iterator[*types.TxResult], error) {
+				return mock.NewSliceTxIterator(txsInRange(txs, from, to)), nil
+			},
+			SetTxAuditHeightFn: func(h uint64) error {
+				persisted = append(persisted, h)
+
+				return nil
+			},
+		}
+
+		// from height 1, window of 1 -> [1],[2],[3],[4]
+		f := New(storageMock, &mockClient{}, &mockEvents{}, WithAuditFromHeight(1), WithTxAuditThrottle(1, 0))
+
+		require.NoError(t, f.auditTxGaps(context.Background()))
+		assert.Equal(t, []uint64{3}, f.gaps.snapshot())
+		// 1 and 2 complete -> persist 1, 2; then height 3 incomplete freezes at 2;
+		// nothing persisted for 3 or 4.
+		assert.Equal(t, []uint64{1, 2, 2}, persisted)
+	})
 }
 
 func TestWriteSlot_QueuesFailedHeights(t *testing.T) {
@@ -268,8 +427,6 @@ func TestWriteSlot_QueuesFailedHeights(t *testing.T) {
 	}
 
 	for _, testCase := range testTable {
-		testCase := testCase
-
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -313,8 +470,9 @@ func TestDrainGaps(t *testing.T) {
 				return &mock.WriteBatch{
 					SetBlockFn: func(b *types.Block) error {
 						mu.Lock()
+						defer mu.Unlock()
+
 						savedBlocks = append(savedBlocks, b)
-						mu.Unlock()
 
 						return nil
 					},
@@ -328,7 +486,7 @@ func TestDrainGaps(t *testing.T) {
 		}
 
 		client := &mockClient{
-			createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+			createBatchFn: erroringBatch,
 			getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
 				return &core_types.ResultBlock{Block: blocks[num]}, nil
 			},
@@ -354,7 +512,7 @@ func TestDrainGaps(t *testing.T) {
 		t.Parallel()
 
 		client := &mockClient{
-			createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+			createBatchFn: erroringBatch,
 			getBlockFn: func(uint64) (*core_types.ResultBlock, error) {
 				return nil, errors.New("still down")
 			},
@@ -380,7 +538,7 @@ func TestDrainGaps(t *testing.T) {
 		}
 
 		client := &mockClient{
-			createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+			createBatchFn: erroringBatch,
 			getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
 				return &core_types.ResultBlock{Block: blocks[num]}, nil
 			},
@@ -426,8 +584,9 @@ func TestRunBackfiller_AuditsThenBackfills(t *testing.T) {
 			return &mock.WriteBatch{
 				SetBlockFn: func(b *types.Block) error {
 					mu.Lock()
+					defer mu.Unlock()
+
 					saved = append(saved, b)
-					mu.Unlock()
 
 					cancel() // stop the backfiller once the gap is filled
 
@@ -438,7 +597,7 @@ func TestRunBackfiller_AuditsThenBackfills(t *testing.T) {
 	}
 
 	client := &mockClient{
-		createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+		createBatchFn: erroringBatch,
 		getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
 			return &core_types.ResultBlock{Block: blocks[num]}, nil
 		},

@@ -13,8 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-
-	clientTypes "github.com/gnolang/tx-indexer/client/types"
 )
 
 // mockBlockResults builds a block results response with numTxs deliver results.
@@ -52,7 +50,7 @@ func TestFetchBlocksWithRetry(t *testing.T) {
 		)
 
 		client := &mockClient{
-			createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+			createBatchFn: erroringBatch,
 			getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
 				mu.Lock()
 				calls[num]++
@@ -75,6 +73,7 @@ func TestFetchBlocksWithRetry(t *testing.T) {
 		// Only the failing height was retried; the rest were fetched exactly once
 		mu.Lock()
 		defer mu.Unlock()
+
 		assert.Equal(t, 3, calls[3])
 
 		for _, h := range []uint64{1, 2, 4, 5} {
@@ -86,7 +85,7 @@ func TestFetchBlocksWithRetry(t *testing.T) {
 		t.Parallel()
 
 		client := &mockClient{
-			createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+			createBatchFn: erroringBatch,
 			getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
 				if num == 4 {
 					return nil, errors.New("permanently gone")
@@ -111,8 +110,9 @@ func TestFetchChunk(t *testing.T) {
 	txs := generateTransactions(t, txCount)
 	blocks := generateBlocks(t, 6, txs)
 
-	// alwaysBlocks serves every block in the range successfully.
-	alwaysBlocks := func(num uint64) (*core_types.ResultBlock, error) {
+	// alwaysBlocks serves every block in the range successfully. The error
+	// return is required by getBlockDelegate even though it is always nil.
+	alwaysBlocks := func(num uint64) (*core_types.ResultBlock, error) { //nolint:unparam // delegate signature
 		return &core_types.ResultBlock{Block: blocks[num]}, nil
 	}
 
@@ -126,7 +126,7 @@ func TestFetchChunk(t *testing.T) {
 			"all blocks and results fetched",
 			func() *mockClient {
 				return &mockClient{
-					createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+					createBatchFn: erroringBatch,
 					getBlockFn:    alwaysBlocks,
 					getBlockResultsFn: func(num uint64) (*core_types.ResultBlockResults, error) {
 						return mockBlockResults(int64(num), txCount), nil
@@ -140,7 +140,7 @@ func TestFetchChunk(t *testing.T) {
 			"block that never fetches is reported missing",
 			func() *mockClient {
 				return &mockClient{
-					createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+					createBatchFn: erroringBatch,
 					getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
 						if num == 4 {
 							return nil, errors.New("permanently gone")
@@ -165,7 +165,7 @@ func TestFetchChunk(t *testing.T) {
 				)
 
 				return &mockClient{
-					createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+					createBatchFn: erroringBatch,
 					getBlockFn:    alwaysBlocks,
 					getBlockResultsFn: func(num uint64) (*core_types.ResultBlockResults, error) {
 						mu.Lock()
@@ -189,7 +189,7 @@ func TestFetchChunk(t *testing.T) {
 			"block whose results never fetch is dropped and reported missing",
 			func() *mockClient {
 				return &mockClient{
-					createBatchFn: func() clientTypes.Batch { return erroringBatch() },
+					createBatchFn: erroringBatch,
 					getBlockFn:    alwaysBlocks,
 					getBlockResultsFn: func(num uint64) (*core_types.ResultBlockResults, error) {
 						if num == 4 {
@@ -206,8 +206,6 @@ func TestFetchChunk(t *testing.T) {
 	}
 
 	for _, testCase := range testTable {
-		testCase := testCase
-
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 

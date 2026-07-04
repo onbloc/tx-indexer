@@ -44,6 +44,7 @@ type startCfg struct {
 	disableIntrospection bool
 	clearOnReset         bool
 	txAudit              bool
+	txAuditReset         bool
 }
 
 // newStartCmd creates the indexer start command
@@ -164,6 +165,13 @@ func (c *startCfg) registerFlags(fs *flag.FlagSet) {
 		fetch.DefaultTxAuditNap,
 		"pause between tx-audit windows; larger values lower the audit's CPU share",
 	)
+
+	fs.BoolVar(
+		&c.txAuditReset,
+		"tx-audit-reset",
+		false,
+		"ignore the stored tx-audit watermark and re-scan from audit-from-height",
+	)
 }
 
 // exec executes the indexer start command
@@ -222,6 +230,7 @@ func (c *startCfg) exec(ctx context.Context) error {
 		fetch.WithTxAudit(c.txAudit),
 		fetch.WithAuditFromHeight(c.auditFromHeight),
 		fetch.WithTxAuditThrottle(c.txAuditWindow, c.txAuditNap),
+		fetch.WithTxAuditReset(c.txAuditReset),
 	)
 
 	// Create the JSON-RPC service

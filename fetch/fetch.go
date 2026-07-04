@@ -69,6 +69,7 @@ type Fetcher struct {
 	clearOnReset bool // wipe storage when the chain resets
 	auditOnStart bool // scan storage for missing-block gaps on startup
 	txAudit      bool // also scan for blocks with missing txs on startup (expensive)
+	txAuditReset bool // ignore the stored tx-audit watermark and re-scan from auditFromHeight
 }
 
 // New creates a new data fetcher instance
@@ -120,6 +121,7 @@ func (f *Fetcher) fetchGenesisData(ctx context.Context) error {
 	}
 
 	f.logger.Info("Fetching genesis")
+
 	block, err := getGenesisBlock(ctx, f.client)
 	if err != nil {
 		f.logger.Warn("RPC genesis fetch failed", zap.Error(err))
@@ -498,14 +500,17 @@ func (f *Fetcher) getGenesisBlockFromURL(ctx context.Context) (*bft_types.Block,
 	if err != nil {
 		return nil, fmt.Errorf("unable to create temp file: %w", err)
 	}
+
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
 	// Download to temp file
-	if err := f.downloadGenesis(ctx, tmpFile); err != nil {
+	if err = f.downloadGenesis(ctx, tmpFile); err != nil {
 		tmpFile.Close()
+
 		return nil, fmt.Errorf("unable to download genesis.json: %w", err)
 	}
+
 	tmpFile.Close()
 
 	data, err := os.ReadFile(tmpPath)
@@ -527,7 +532,8 @@ func (f *Fetcher) getGenesisBlockFromURL(ctx context.Context) (*bft_types.Block,
 	}
 
 	var genDoc bft_types.GenesisDoc
-	if err := amino.UnmarshalJSON(data, &genDoc); err != nil {
+
+	if err = amino.UnmarshalJSON(data, &genDoc); err != nil {
 		return nil, fmt.Errorf("unable to parse genesis.json: %w", err)
 	}
 
@@ -562,7 +568,7 @@ func (f *Fetcher) getGenesisBlockFromURL(ctx context.Context) (*bft_types.Block,
 // downloadGenesis downloads the genesis file from the configured URL,
 // streaming directly to the provided file to handle large payloads.
 func (f *Fetcher) downloadGenesis(ctx context.Context, dest *os.File) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.genesisURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.genesisURL, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("unable to create request: %w", err)
 	}
@@ -622,6 +628,7 @@ func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
 	known := knownJSONFields(reflect.TypeOf(gnoland.GnoTxMetadata{}))
 
 	changed := false
+
 	for _, tx := range txs {
 		metaRaw, ok := tx["metadata"]
 		if !ok {
@@ -629,6 +636,7 @@ func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
 		}
 
 		var meta map[string]json.RawMessage
+
 		if err := json.Unmarshal(metaRaw, &meta); err != nil {
 			return nil, fmt.Errorf("unable to decode tx metadata: %w", err)
 		}
@@ -636,6 +644,7 @@ func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
 		for key := range meta {
 			if !known[key] {
 				delete(meta, key)
+
 				changed = true
 			}
 		}
@@ -658,12 +667,14 @@ func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to re-encode genesis txs: %w", err)
 	}
+
 	appState["txs"] = newTxs
 
 	newAppState, err := json.Marshal(appState)
 	if err != nil {
 		return nil, fmt.Errorf("unable to re-encode app_state: %w", err)
 	}
+
 	doc["app_state"] = newAppState
 
 	return json.Marshal(doc)
@@ -677,10 +688,12 @@ func knownJSONFields(t reflect.Type) map[string]bool {
 	fields := make(map[string]bool, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag.Get("json")
+
 		name := strings.Split(tag, ",")[0]
 		if name == "" || name == "-" {
 			name = t.Field(i).Name
 		}
+
 		fields[name] = true
 	}
 

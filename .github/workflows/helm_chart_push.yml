@@ -10,7 +10,7 @@ on:
       helm-chart-repo:
         required: true
         type: string
-        description: "GitHub repository path for helm chart (e.g., onbloc/onbloc-helm-chart)"
+        description: "GitHub repository path for helm chart (e.g., onbloc/onbloc-helm-charts)"
     secrets:
       PAT_TOKEN:
         required: true
@@ -22,17 +22,39 @@ jobs:
   helm_chart_push:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve helm chart target
+        run: |
+          ENV="${{ inputs.env }}"
+          # onbloc/onbloc-helm-charts: branch dev/prd, per-network values-<net>.yaml.
+          # Other repos: keep existing layout (env as branch, values-<env>.yaml).
+          if [[ "${{ inputs.helm-chart-repo }}" == "onbloc/onbloc-helm-charts" ]]; then
+            case "$ENV" in
+              dev-*) BRANCH=dev ;;
+              prd-*) BRANCH=prd ;;
+              *) echo "unknown env cluster: $ENV" >&2; exit 1 ;;
+            esac
+            case "$ENV" in
+              *-stage-*)   NET=staging ;;
+              *-testnet-*) NET=testnet ;;
+              *)           NET=mainnet ;;
+            esac
+            echo "BRANCH=$BRANCH"               >> "$GITHUB_ENV"
+            echo "VALUES_FILE=values-$NET.yaml" >> "$GITHUB_ENV"
+          else
+            echo "BRANCH=$ENV"                  >> "$GITHUB_ENV"
+            echo "VALUES_FILE=values-$ENV.yaml" >> "$GITHUB_ENV"
+          fi
+
       - name: Clone Helm Chart Repo
         run: |
-          echo ${{ secrets.PAT_TOKEN }}
           git clone https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ inputs.helm-chart-repo }}.git helm-chart
 
       - name: Make changes to Helm Chart Repo
         run: |
           cd helm-chart/
-          git checkout -b deploy-${{ github.run_id }}-${{ inputs.app-name }} origin/${{ inputs.env }}
+          git checkout -b deploy-${{ github.run_id }}-${{ inputs.app-name }} origin/$BRANCH
           cd ${{ inputs.app-name }}
-          sed -i "s/^\(\s*tag\s*:\s*\).*/\1'${{ github.sha }}'/" values-${{ inputs.env }}.yaml
+          sed -i "s/^\(\s*tag\s*:\s*\).*/\1'${{ github.sha }}'/" "$VALUES_FILE"
 
       - name: Commit and push changes to helm repository
         run: |
@@ -42,9 +64,9 @@ jobs:
           git add .
           git commit -m "Pushed ${{ inputs.app-name }}-${{ inputs.env }}:${{ github.sha }}"
           git push origin deploy-${{ github.run_id }}-${{ inputs.app-name }}
-          git checkout ${{ inputs.env }}
+          git checkout $BRANCH
           git pull --rebase origin deploy-${{ github.run_id }}-${{ inputs.app-name }} || git rebase --abort
-          git push origin ${{ inputs.env }}
+          git push origin $BRANCH
           git branch -d deploy-${{ github.run_id }}-${{ inputs.app-name }}
           git push origin --delete deploy-${{ github.run_id }}-${{ inputs.app-name }}
           echo "  ____                     _ "

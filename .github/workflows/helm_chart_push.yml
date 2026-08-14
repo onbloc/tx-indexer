@@ -10,7 +10,19 @@ on:
       helm-chart-repo:
         required: true
         type: string
-        description: "GitHub repository path for helm chart (e.g., onbloc/onbloc-helm-charts)"
+        description: "GitHub repository path for the helm chart (e.g., onbloc/onbloc-helm-charts)"
+      helm-branch:
+        required: true
+        type: string
+        description: "Deploy branch to push the image tag to (e.g., dev, prd)"
+      network:
+        required: false
+        type: string
+        description: "Network for per-network values (mainnet | staging | testnet). Omit for a single values.yaml."
+      helm-values-file:
+        required: false
+        type: string
+        description: "Explicit values file name. Overrides network. Use for charts not following values-<network>.yaml."
     secrets:
       PAT_TOKEN:
         required: true
@@ -22,27 +34,16 @@ jobs:
   helm_chart_push:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve helm chart target
+      - name: Resolve values file
         run: |
-          ENV="${{ inputs.env }}"
-          # onbloc/onbloc-helm-charts: branch dev/prd, per-network values-<net>.yaml.
-          # Other repos: keep existing layout (env as branch, values-<env>.yaml).
-          if [[ "${{ inputs.helm-chart-repo }}" == "onbloc/onbloc-helm-charts" ]]; then
-            case "$ENV" in
-              dev-*) BRANCH=dev ;;
-              prd-*) BRANCH=prd ;;
-              *) echo "unknown env cluster: $ENV" >&2; exit 1 ;;
-            esac
-            case "$ENV" in
-              *-stage-*)   NET=staging ;;
-              *-testnet-*) NET=testnet ;;
-              *)           NET=mainnet ;;
-            esac
-            echo "BRANCH=$BRANCH"               >> "$GITHUB_ENV"
-            echo "VALUES_FILE=values-$NET.yaml" >> "$GITHUB_ENV"
+          # Target branch and values are passed in explicitly (no env parsing).
+          # Precedence: helm-values-file > values-<network>.yaml > values.yaml
+          if [ -n "${{ inputs.helm-values-file }}" ]; then
+            echo "VALUES_FILE=${{ inputs.helm-values-file }}" >> "$GITHUB_ENV"
+          elif [ -n "${{ inputs.network }}" ]; then
+            echo "VALUES_FILE=values-${{ inputs.network }}.yaml" >> "$GITHUB_ENV"
           else
-            echo "BRANCH=$ENV"                  >> "$GITHUB_ENV"
-            echo "VALUES_FILE=values-$ENV.yaml" >> "$GITHUB_ENV"
+            echo "VALUES_FILE=values.yaml" >> "$GITHUB_ENV"
           fi
 
       - name: Clone Helm Chart Repo
@@ -52,7 +53,7 @@ jobs:
       - name: Make changes to Helm Chart Repo
         run: |
           cd helm-chart/
-          git checkout -b deploy-${{ github.run_id }}-${{ inputs.app-name }} origin/$BRANCH
+          git checkout -b deploy-${{ github.run_id }}-${{ inputs.app-name }} origin/${{ inputs.helm-branch }}
           cd ${{ inputs.app-name }}
           sed -i "s/^\(\s*tag\s*:\s*\).*/\1'${{ github.sha }}'/" "$VALUES_FILE"
 
@@ -64,9 +65,9 @@ jobs:
           git add .
           git commit -m "Pushed ${{ inputs.app-name }}-${{ inputs.env }}:${{ github.sha }}"
           git push origin deploy-${{ github.run_id }}-${{ inputs.app-name }}
-          git checkout $BRANCH
+          git checkout ${{ inputs.helm-branch }}
           git pull --rebase origin deploy-${{ github.run_id }}-${{ inputs.app-name }} || git rebase --abort
-          git push origin $BRANCH
+          git push origin ${{ inputs.helm-branch }}
           git branch -d deploy-${{ github.run_id }}-${{ inputs.app-name }}
           git push origin --delete deploy-${{ github.run_id }}-${{ inputs.app-name }}
           echo "  ____                     _ "

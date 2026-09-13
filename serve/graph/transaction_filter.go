@@ -74,25 +74,141 @@ func filteredTransactionByEvents(tx *model.Transaction, eventInputs []*model.Eve
 }
 
 // `filteredEventBy` checks the conditions of a event.
+// Each input field only matches the concrete event type it was declared for.
 func filteredEventBy(event model.Event, eventInput *model.EventInput) bool {
-	if event == nil {
+	if event == nil || eventInput == nil {
 		return false
 	}
 
-	gnoEvent, ok := event.(*model.GnoEvent)
-	if !ok {
+	switch e := event.(type) {
+	case *model.GnoEvent:
+		return filteredGnoEventBy(e, eventInput.GnoEvent)
+	case *model.StorageDepositEvent:
+		return filteredStorageDepositEventBy(e, eventInput.StorageDepositEvent)
+	case *model.StorageUnlockEvent:
+		return filteredStorageUnlockEventBy(e, eventInput.StorageUnlockEvent)
+	case *model.TransferEvent:
+		return filteredTransferEventBy(e, eventInput.TransferEvent)
+	default:
+		return false
+	}
+}
+
+// `filteredGnoEventBy` checks the conditions of an event of type GnoEvent.
+func filteredGnoEventBy(gnoEvent *model.GnoEvent, input *model.GnoEventInput) bool {
+	if input == nil {
 		return false
 	}
 
-	if eventInput.GnoEvent.Type != nil && deref(eventInput.GnoEvent.Type) != gnoEvent.Type {
+	if input.Type != nil && deref(input.Type) != gnoEvent.Type {
 		return false
 	}
 
-	if eventInput.GnoEvent.PkgPath != nil && deref(eventInput.GnoEvent.PkgPath) != gnoEvent.PkgPath {
+	if input.PkgPath != nil && deref(input.PkgPath) != gnoEvent.PkgPath {
 		return false
 	}
 
-	if eventInput.GnoEvent.Attrs != nil && !filteredGnoEventAttributesBy(gnoEvent.Attrs, eventInput.GnoEvent.Attrs) {
+	if input.Attrs != nil && !filteredGnoEventAttributesBy(gnoEvent.Attrs, input.Attrs) {
+		return false
+	}
+
+	return true
+}
+
+// `filteredStorageDepositEventBy` checks the conditions of an event of type StorageDepositEvent.
+func filteredStorageDepositEventBy(event *model.StorageDepositEvent, input *model.StorageDepositEventInput) bool {
+	if input == nil {
+		return false
+	}
+
+	if input.Type != nil && deref(input.Type) != event.Type {
+		return false
+	}
+
+	if input.BytesDelta != nil && deref(input.BytesDelta) != event.BytesDelta {
+		return false
+	}
+
+	if input.FeeDelta != nil && !filteredCoinBy(event.FeeDelta, input.FeeDelta) {
+		return false
+	}
+
+	if input.PkgPath != nil && deref(input.PkgPath) != event.PkgPath {
+		return false
+	}
+
+	return true
+}
+
+// `filteredStorageUnlockEventBy` checks the conditions of an event of type StorageUnlockEvent.
+func filteredStorageUnlockEventBy(event *model.StorageUnlockEvent, input *model.StorageUnlockEventInput) bool {
+	if input == nil {
+		return false
+	}
+
+	if input.Type != nil && deref(input.Type) != event.Type {
+		return false
+	}
+
+	if input.BytesDelta != nil && deref(input.BytesDelta) != event.BytesDelta {
+		return false
+	}
+
+	if input.FeeRefund != nil && !filteredCoinBy(event.FeeRefund, input.FeeRefund) {
+		return false
+	}
+
+	if input.PkgPath != nil && deref(input.PkgPath) != event.PkgPath {
+		return false
+	}
+
+	if input.RefundWithheld != nil && deref(input.RefundWithheld) != event.RefundWithheld {
+		return false
+	}
+
+	return true
+}
+
+// `filteredTransferEventBy` checks the conditions of an event of type TransferEvent.
+func filteredTransferEventBy(event *model.TransferEvent, input *model.TransferEventInput) bool {
+	if input == nil {
+		return false
+	}
+
+	if input.Type != nil && deref(input.Type) != event.Type {
+		return false
+	}
+
+	if input.From != nil && deref(input.From) != event.From {
+		return false
+	}
+
+	if input.To != nil && deref(input.To) != event.To {
+		return false
+	}
+
+	if input.Coins != nil && !filteredAmountBy(event.Coins, input.Coins) {
+		return false
+	}
+
+	return true
+}
+
+// `filteredCoinBy` checks a coin against an exact amount and denomination.
+func filteredCoinBy(coin *model.Coin, input *model.CoinInput) bool {
+	if input == nil {
+		return true
+	}
+
+	if coin == nil {
+		return false
+	}
+
+	if input.Amount != nil && deref(input.Amount) != coin.Amount {
+		return false
+	}
+
+	if input.Denom != nil && deref(input.Denom) != coin.Denom {
 		return false
 	}
 

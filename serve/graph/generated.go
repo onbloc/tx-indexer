@@ -3650,7 +3650,7 @@ type Supply {
 	total: String!
 	"""
 	The portion held by vesting accounts under a schedule that has not vested
-	yet, clamped to the balance each account actually holds.
+	yet.
 	"""
 	locked: String!
 	"""

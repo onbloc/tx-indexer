@@ -298,9 +298,8 @@ difference (`spendable`), which is what data aggregators call the circulating su
 The figures come from a background snapshot the indexer refreshes on its own schedule (every 10 seconds), so requests
 never reach the chain. The snapshot covers only the denoms listed in `--supply-denoms` (default `ugnot`): the total is
 read from the chain's per-denom supply counter, and the locked portion is computed from the vesting schedules in the
-chain genesis, evaluated at the snapshot's block time and clamped to the balance each account actually holds. All
-figures in a snapshot were read at the same height, in one batched query. If a refresh fails, the last good snapshot
-keeps serving.
+chain genesis, evaluated at the snapshot's block time. All figures in a snapshot were read at the same height, in one
+batched query. If a refresh fails, the last good snapshot keeps serving.
 
 Example request:
 

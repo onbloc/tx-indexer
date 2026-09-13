@@ -148,15 +148,15 @@ func statusAt(height, unix int64) *core_types.ResultStatus {
 	}
 }
 
-// chainFixture answers one batch at one height, from plain maps.
+// chainFixture answers one batch at one height, from a plain map.
 // errBatch fails the whole batch when set; errSupplyResponse makes every
 // bank/supply result carry an ABCI error (a chain without the route);
-// panicBatch makes the batch call panic.
+// panicBatch makes the batch call panic. Only bank/supply is answered: the
+// refresh must never ask for a per-account balance.
 type chainFixture struct {
-	supply   map[string]int64
-	balances map[crypto.Address]std.Coins
-	rec      *batchRecorder
-	status   *core_types.ResultStatus
+	supply map[string]int64
+	rec    *batchRecorder
+	status *core_types.ResultStatus
 
 	errBatch          error
 	errSupplyResponse error
@@ -167,10 +167,9 @@ type chainFixture struct {
 
 func newChainFixture() *chainFixture {
 	return &chainFixture{
-		supply:   map[string]int64{},
-		balances: map[crypto.Address]std.Coins{},
-		rec:      &batchRecorder{},
-		status:   statusAt(42, 150),
+		supply: map[string]int64{},
+		rec:    &batchRecorder{},
+		status: statusAt(42, 150),
 	}
 }
 
@@ -208,15 +207,6 @@ func (f *chainFixture) client() *mockClient {
 					}
 
 					results[i] = abciData(amino.MustMarshalJSON(f.supply[path[len("bank/supply/"):]]))
-				case hasPrefix(path, "bank/balances/"):
-					addr, err := crypto.AddressFromBech32(path[len("bank/balances/"):])
-					if err != nil {
-						results[i] = abciError(fmt.Errorf("bad address in fixture path %q", path))
-
-						continue
-					}
-
-					results[i] = abciData(amino.MustMarshalJSON(f.balances[addr]))
 				default:
 					results[i] = abciError(fmt.Errorf("unknown query path %q", path))
 				}
@@ -357,12 +347,6 @@ func TestRefreshBuildsConsistentSnapshot(t *testing.T) {
 
 	fixture := newChainFixture()
 	fixture.supply[testDenom] = 10_000
-	fixture.balances = map[crypto.Address]std.Coins{
-		vesterA: std.NewCoins(coin(testDenom, 1000)), // continuous, untouched
-		vesterB: std.NewCoins(coin(testDenom, 300)),  // continuous, spent into the locked portion
-		vesterC: std.NewCoins(coin(testDenom, 2000)), // delayed
-		plain:   std.NewCoins(coin(testDenom, 4700)), // not vesting
-	}
 
 	h := newHandler(t, fixture,
 		vestingBalance(vesterA, continuousSchedule(), 1000),
@@ -372,25 +356,27 @@ func TestRefreshBuildsConsistentSnapshot(t *testing.T) {
 	)
 	h.refresh(context.Background())
 
-	// Every read the refresh made happened at one height, in one batch.
-	require.Equal(t, 1, fixture.rec.count(), "totals and balances must share one batch")
+	// Every read the refresh made happened at one height, in one batch,
+	// and only the supply counter was read: no per-account balances.
+	require.Equal(t, 1, fixture.rec.count(), "totals must come from one batch")
 	batch := fixture.rec.batches[0]
 	require.Equal(t, int64(42), batch.height, "the batch must run at the status height")
-	require.Len(t, batch.paths, 4, "one supply path plus three vesting balances")
+	require.Equal(t, []string{"bank/supply/" + testDenom}, batch.paths, "only the supply path, never a balance")
 
 	supply, err := h.GetSupply(context.Background(), testDenom)
 	require.NoError(t, err)
 
 	// vesterA: 1000 continuous at t=150 -> 500 locked.
-	// vesterB: schedule says 500 unvested but only 300 held -> clamped to 300.
+	// vesterB: 1000 continuous at t=150 -> 500 locked, from the schedule
+	//          alone; the live balance is never read, so no clamp.
 	// vesterC: delayed, end t=200, now t=150 -> all 2000 locked.
 	// plain: no schedule, contributes nothing.
 	require.Equal(t, &methods.Supply{
 		Denom:     testDenom,
 		Height:    42,
 		Total:     10_000,
-		Spendable: 10_000 - (500 + 300 + 2000),
-		Locked:    500 + 300 + 2000,
+		Spendable: 10_000 - (500 + 500 + 2000),
+		Locked:    500 + 500 + 2000,
 	}, supply)
 }
 
@@ -400,7 +386,6 @@ func TestGetSupplyFullyVested(t *testing.T) {
 	fixture := newChainFixture()
 	fixture.status = statusAt(50, 300) // past the end time
 	fixture.supply[testDenom] = 1000
-	fixture.balances[vesterA] = std.NewCoins(coin(testDenom, 1000))
 
 	h := newHandler(t, fixture, vestingBalance(vesterA, continuousSchedule(), 1000))
 	h.refresh(context.Background())

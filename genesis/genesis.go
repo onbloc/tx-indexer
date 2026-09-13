@@ -111,6 +111,7 @@ func bootstrap(ctx context.Context, store Storage, client Client, cfg *config) e
 
 		doc, state, err = fetchStateFromURL(ctx, cfg.genesisURL)
 	}
+
 	if err != nil {
 		return err
 	}
@@ -263,32 +264,38 @@ func fetchStateFromURL(
 	if err != nil {
 		return nil, gnoland.GnoGenesisState{}, fmt.Errorf("unable to create temporary genesis file: %w", err)
 	}
+
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		tmpFile.Close()
+
 		return nil, gnoland.GnoGenesisState{}, fmt.Errorf("unable to create genesis request: %w", err)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		tmpFile.Close()
+
 		return nil, gnoland.GnoGenesisState{}, fmt.Errorf("unable to fetch genesis URL: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		tmpFile.Close()
+
 		return nil, gnoland.GnoGenesisState{}, fmt.Errorf("unexpected genesis URL status: %s", resp.Status)
 	}
 
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+	if _, err = io.Copy(tmpFile, resp.Body); err != nil {
 		tmpFile.Close()
+
 		return nil, gnoland.GnoGenesisState{}, fmt.Errorf("unable to download genesis: %w", err)
 	}
-	if err := tmpFile.Close(); err != nil {
+
+	if err = tmpFile.Close(); err != nil {
 		return nil, gnoland.GnoGenesisState{}, fmt.Errorf("unable to close downloaded genesis: %w", err)
 	}
 
@@ -345,6 +352,7 @@ func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
 
 	known := knownJSONFields(reflect.TypeOf(gnoland.GnoTxMetadata{}))
 	changed := false
+
 	for _, tx := range txs {
 		metaRaw, ok := tx["metadata"]
 		if !ok {
@@ -359,6 +367,7 @@ func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
 		for key := range meta {
 			if !known[key] {
 				delete(meta, key)
+
 				changed = true
 			}
 		}
@@ -367,6 +376,7 @@ func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unable to re-encode tx metadata: %w", err)
 		}
+
 		tx["metadata"] = cleaned
 	}
 
@@ -378,12 +388,14 @@ func sanitizeGenesisTxMetadata(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to re-encode genesis txs: %w", err)
 	}
+
 	appState["txs"] = newTxs
 
 	newAppState, err := json.Marshal(appState)
 	if err != nil {
 		return nil, fmt.Errorf("unable to re-encode app_state: %w", err)
 	}
+
 	doc["app_state"] = newAppState
 
 	return json.Marshal(doc)
@@ -393,10 +405,12 @@ func knownJSONFields(t reflect.Type) map[string]bool {
 	fields := make(map[string]bool, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		tag := t.Field(i).Tag.Get("json")
+
 		name := strings.Split(tag, ",")[0]
 		if name == "" || name == "-" {
 			name = t.Field(i).Name
 		}
+
 		fields[name] = true
 	}
 

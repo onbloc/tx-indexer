@@ -51,10 +51,10 @@ type startCfg struct {
 	logLevel             string
 	corsAllowedOrigins   string
 	supplyDenoms         string
-	maxSlots             int
-	maxChunkSize         int64
-	rateLimit            int
 	genesisURL           string
+	rateLimit            int
+	maxChunkSize         int64
+	maxSlots             int
 	auditFromHeight      uint64
 	txAuditWindow        int
 	txAuditNap           time.Duration

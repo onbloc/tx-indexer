@@ -42,18 +42,19 @@ type Fetcher struct {
 	logger      *zap.Logger
 	chunkBuffer *slots
 	gaps        *gapTracker // heights pending backfill (fetch or save failures)
-	dbPath      string
 
 	// retrying holds the slot ranges with missing heights, mapped to whether
 	// the refetch is waiting to be respawned (true) or already in flight
 	// (false). A range leaves the map only once it has been fetched in full
 	retrying map[chunkRange]bool
 
-	maxSlots         int
-	maxChunkSize     int64
+	dbPath string
+	retry  retryConfig // retry policy for failed block / tx fetches
+
 	latestChunkSize  int
+	maxChunkSize     int64
 	queryInterval    time.Duration // block query interval
-	retry            retryConfig   // retry policy for failed block / tx fetches
+	maxSlots         int
 	backfillInterval time.Duration // how often queued gaps are re-fetched
 	auditFromHeight  uint64        // lower bound for both audits (skip heights below it)
 	txAuditWindow    int           // heights per tx-audit window (throttle + resume granularity)
@@ -108,7 +109,6 @@ func New(
 // blockchain data. The genesis block is not handled here — the genesis
 // package bootstraps it into the storage before any service starts.
 func (f *Fetcher) FetchChainData(ctx context.Context) error {
-
 	// Start the backfiller. It repairs any gaps left behind by failed
 	// fetches / saves (including pre-existing ones already in storage)
 	// without blocking the forward-fetching loop.

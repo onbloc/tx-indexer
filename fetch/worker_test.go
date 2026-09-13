@@ -209,7 +209,7 @@ func TestFetchChunk(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			c, missing, err := fetchChunk(
+			c, missing := fetchChunk(
 				context.Background(),
 				testCase.buildClient(),
 				chunkRange{from: 2, to: 5},
@@ -219,12 +219,6 @@ func TestFetchChunk(t *testing.T) {
 
 			assert.Equal(t, testCase.expectedHeights, blockHeightsOf(c.blocks))
 			assert.Equal(t, testCase.expectedMissing, missing)
-
-			if len(testCase.expectedMissing) > 0 {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
 		})
 	}
 }

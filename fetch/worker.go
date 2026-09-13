@@ -55,11 +55,10 @@ type workerInfo struct {
 
 // workerResponse is the routine response
 type workerResponse struct {
-	error error
 	chunk *chunk
 
-	// missingBlocks are heights in the range still unavailable after retries,
-	// to be scheduled for backfill rather than skipped.
+	// missingBlocks are heights in the range still unavailable after retries;
+	// the collector keeps the partial chunk and refetches only these.
 	missingBlocks []uint64
 
 	chunkRange chunkRange
@@ -67,7 +66,7 @@ type workerResponse struct {
 
 // handleChunk fetches the chunk, retrying failed heights so transient RPC
 // errors do not silently drop blocks. Heights still unavailable after all
-// retries are reported in missingBlocks for later backfill.
+// retries are reported in missingBlocks so only they are fetched again.
 func handleChunk(
 	ctx context.Context,
 	client Client,
@@ -78,10 +77,9 @@ func handleChunk(
 		logger = zap.NewNop()
 	}
 
-	c, missing, err := fetchChunk(ctx, client, info.chunkRange, info.retry, logger)
+	c, missing := fetchChunk(ctx, client, info.chunkRange, info.retry, logger)
 
 	response := &workerResponse{
-		error:         err,
 		chunk:         c,
 		chunkRange:    info.chunkRange,
 		missingBlocks: missing,
@@ -96,14 +94,14 @@ func handleChunk(
 // fetchChunk fetches the blocks and tx results for the range, retrying only
 // the heights that fail. The returned chunk holds only fully-fetched blocks
 // (block + tx results); heights that could not be completed are returned in
-// missing for later backfill.
+// missing so only they are fetched again.
 func fetchChunk(
 	ctx context.Context,
 	client Client,
 	r chunkRange,
 	retry retryConfig,
 	logger *zap.Logger,
-) (*chunk, []uint64, error) {
+) (*chunk, []uint64) {
 	blocks := fetchBlocksWithRetry(ctx, client, r, retry, logger)
 
 	// A block whose results can't be fetched is dropped from the chunk (and
@@ -128,17 +126,27 @@ func fetchChunk(
 		have[uint64(block.Height)] = struct{}{}
 	}
 
-	missing := missingHeights(r, have)
-
-	var err error
-	if len(missing) > 0 {
-		err = fmt.Errorf("unable to fully fetch %d block(s) in range [%d, %d]", len(missing), r.from, r.to)
-	}
-
 	return &chunk{
 		blocks:  completeBlocks,
 		results: completeResults,
-	}, missing, err
+	}, missingHeights(r, have)
+}
+
+// contiguousRanges groups ascending heights into consecutive ranges.
+func contiguousRanges(heights []uint64) []chunkRange {
+	var ranges []chunkRange
+
+	for _, height := range heights {
+		if n := len(ranges); n > 0 && ranges[n-1].to+1 == height {
+			ranges[n-1].to = height
+
+			continue
+		}
+
+		ranges = append(ranges, chunkRange{from: height, to: height})
+	}
+
+	return ranges
 }
 
 // missingHeights returns the heights in the range absent from have, ascending.

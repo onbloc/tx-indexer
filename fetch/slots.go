@@ -16,13 +16,14 @@ type chunk struct {
 
 // slot is a single chunk slot
 type slot struct {
-	chunk      *chunk     // retrieved data chunk
-	chunkRange chunkRange // retrieved data chunk range
+	chunk *chunk // retrieved data chunk
 
 	// missing holds the heights of the range not yet present in chunk. A slot
 	// is only written out once it is complete (chunk set and missing empty),
 	// so the saved latest height never advances past an unfetched block
 	missing []uint64
+
+	chunkRange chunkRange // retrieved data chunk range
 }
 
 // complete returns true when the slot holds every block of its range

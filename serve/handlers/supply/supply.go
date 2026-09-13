@@ -104,7 +104,7 @@ func NewVestings(balances []gnoland.Balance) ([]Vesting, error) {
 	return vestings, nil
 }
 
-// newVestingAccoun// validateVesting runs the same checks the chain's applyBalance runs at
+// validateVesting runs the same checks the chain's applyBalance runs at
 // InitChain: the schedule must be well-formed and the row's amount must cover
 // the vesting amount.
 func validateVesting(coins std.Coins, schedule std.VestingSchedule) error {

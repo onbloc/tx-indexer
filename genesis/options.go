@@ -10,8 +10,8 @@ type Option func(c *config)
 
 type config struct {
 	logger     *zap.Logger
-	backoff    time.Duration
 	genesisURL string
+	backoff    time.Duration
 }
 
 // WithLogger sets the logger to be used with the bootstrap

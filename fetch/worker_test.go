@@ -53,8 +53,10 @@ func TestFetchBlocksWithRetry(t *testing.T) {
 			createBatchFn: erroringBatch,
 			getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
 				mu.Lock()
+
 				calls[num]++
 				attempt := calls[num]
+
 				mu.Unlock()
 
 				// Height 3 fails on its first two attempts, then succeeds
@@ -169,8 +171,10 @@ func TestFetchChunk(t *testing.T) {
 					getBlockFn:    alwaysBlocks,
 					getBlockResultsFn: func(num uint64) (*core_types.ResultBlockResults, error) {
 						mu.Lock()
+
 						calls[num]++
 						attempt := calls[num]
+
 						mu.Unlock()
 
 						// Height 4 results fail once, then succeed

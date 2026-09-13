@@ -340,16 +340,11 @@ func (h *Handler) computeSnapshot(ctx context.Context) (*snapshot, error) {
 	height := status.SyncInfo.LatestBlockHeight
 	blockTime := status.SyncInfo.LatestBlockTime
 
-	// One batch at one height, so the totals and every vesting balance
-	// come from the same block. These round trips belong to the handler,
-	// never to a request.
-	paths := make([]string, 0, len(h.denoms)+len(h.vestings))
+	// One batch at one height, so the totals come from the same block.
+	// These round trips belong to the handler, never to a request.
+	paths := make([]string, 0, len(h.denoms))
 	for _, denom := range h.denoms {
 		paths = append(paths, "bank/supply/"+denom)
-	}
-
-	for _, vesting := range h.vestings {
-		paths = append(paths, "bank/balances/"+crypto.AddressToBech32(vesting.address))
 	}
 
 	results, err := h.client.ABCIQueryBatchAtHeight(ctx, height, paths)
@@ -372,24 +367,11 @@ func (h *Handler) computeSnapshot(ctx context.Context) (*snapshot, error) {
 		totals[denom] = total
 	}
 
-	balances := make(map[crypto.Address]std.Coins, len(h.vestings))
-
-	for i, vesting := range h.vestings {
-		coins, err := decodeBalance(results[len(h.denoms)+i])
-		if err != nil {
-			return nil, fmt.Errorf("bank/balances/%s at height %d: %w", vesting.address, height, err)
-		}
-
-		balances[vesting.address] = coins
-	}
-
 	supplies := make(map[string]*methods.Supply, len(h.denoms))
 
 	for _, denom := range h.denoms {
-		// Locked is the still-unvested amount, clamped to the balance the
-		// account actually holds. Fees and storage refunds bypass the lock
-		// and can eat into the locked portion, and there is nothing to
-		// lock if the coins are already gone.
+		// Locked is the still-unvested amount of every genesis schedule,
+		// computed without reading each account's balance.
 		var locked int64
 
 		for _, vesting := range h.vestings {
@@ -398,9 +380,7 @@ func (h *Handler) computeSnapshot(ctx context.Context) (*snapshot, error) {
 				continue
 			}
 
-			amount := min(balances[vesting.address].AmountOf(denom), unvested)
-
-			sum, ok := overflow.Add(locked, amount)
+			sum, ok := overflow.Add(locked, unvested)
 			if !ok {
 				sum = locked // skip the unrepresentable remainder rather than go negative
 			}
@@ -412,7 +392,7 @@ func (h *Handler) computeSnapshot(ctx context.Context) (*snapshot, error) {
 
 		spendable := total - locked
 		if spendable < 0 {
-			// The counter disagrees with the balances; report the floor
+			// The counter disagrees with the schedules; report the floor
 			// rather than a negative circulating supply.
 			spendable = 0
 		}
@@ -441,20 +421,6 @@ func decodeSupply(res *core_types.ResultABCIQuery) (int64, error) {
 	}
 
 	return total, nil
-}
-
-func decodeBalance(res *core_types.ResultABCIQuery) (std.Coins, error) {
-	if err := responseError(res); err != nil {
-		return nil, err
-	}
-
-	var coins std.Coins
-
-	if err := amino.UnmarshalJSON(res.Response.Data, &coins); err != nil {
-		return nil, fmt.Errorf("unable to decode balance: %w", err)
-	}
-
-	return coins, nil
 }
 
 func responseError(res *core_types.ResultABCIQuery) error {

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"time"
 
 	queue "github.com/madz-lab/insertion-queue"
@@ -45,8 +44,8 @@ type Fetcher struct {
 	gaps        *gapTracker // heights pending backfill (fetch or save failures)
 	dbPath      string
 
-	// retrying holds the chunk ranges whose fetch failed, mapped to whether
-	// the range is waiting to be respawned (true) or already back in flight
+	// retrying holds the slot ranges with missing heights, mapped to whether
+	// the refetch is waiting to be respawned (true) or already in flight
 	// (false). A range leaves the map only once it has been fetched in full
 	retrying map[chunkRange]bool
 
@@ -188,9 +187,9 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 		return nil
 	}
 
-	// refetchFailedRanges respawns workers for the ranges whose previous fetch
-	// failed. Their slots stay reserved with a nil chunk, so the write loop
-	// cannot advance past them until a refetch succeeds
+	// refetchFailedRanges respawns workers for only the heights still missing
+	// from incomplete slots. The already fetched blocks stay in the slot, and
+	// the write loop cannot advance past it until the slot is complete
 	refetchFailedRanges := func() {
 		for gap, queued := range f.retrying {
 			if !queued {
@@ -198,21 +197,32 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 				continue
 			}
 
-			f.retrying[gap] = false
+			index := f.chunkBuffer.findSlot(gap.from)
+			if index < 0 {
+				delete(f.retrying, gap)
 
-			f.logger.Info(
-				"Refetching range",
-				zap.Uint64("from", gap.from),
-				zap.Uint64("to", gap.to),
-			)
-
-			// Spawn worker
-			info := &workerInfo{
-				chunkRange: gap,
-				resCh:      collectorCh,
+				continue
 			}
 
-			go handleChunk(ctx, f.client, info)
+			f.retrying[gap] = false
+
+			for _, r := range contiguousRanges(f.chunkBuffer.getSlot(index).missing) {
+				f.logger.Info(
+					"Refetching missing blocks",
+					zap.Uint64("from", r.from),
+					zap.Uint64("to", r.to),
+				)
+
+				// Spawn worker
+				info := &workerInfo{
+					chunkRange: r,
+					resCh:      collectorCh,
+					retry:      f.retry,
+					logger:     f.logger,
+				}
+
+				go handleChunk(ctx, f.client, info)
+			}
 		}
 	}
 
@@ -240,64 +250,45 @@ func (f *Fetcher) FetchChainData(ctx context.Context) error {
 				return err
 			}
 		case response := <-collectorCh:
-			if response.error != nil {
-				f.logger.Error(
-					"error encountered during chunk fetch, refetching range",
+			// Find the slot owning the response. The underlying slots are
+			// shifted constantly to accommodate new ranges, and a refetch
+			// covers only a sub-range, so the slot is looked up by height
+			index := f.chunkBuffer.findSlot(response.chunkRange.from)
+			if index < 0 {
+				f.logger.Warn(
+					"dropping response for unknown range",
 					zap.Uint64("from", response.chunkRange.from),
 					zap.Uint64("to", response.chunkRange.to),
-					zap.String("error", response.error.Error()),
 				)
-
-				// The chunk is dropped rather than saved. A partially fetched
-				// chunk holds blocks whose transactions are missing, and
-				// committing it advances the saved height past them, so the
-				// fetcher would never revisit those blocks and the missing
-				// transactions would be lost for good. Leaving the slot
-				// reserved with a nil chunk blocks the write loop below until
-				// the refetch succeeds
-				f.retrying[response.chunkRange] = true
 
 				continue
 			}
 
-			delete(f.retrying, response.chunkRange)
+			item := f.chunkBuffer.getSlot(index)
+			item.merge(response.chunk)
 
-			// Find the slot index.
-			// The reason for this search, is because the underlying
-			// slots are shifted constantly to accommodate new ranges,
-			// so by the time a slot is fetched, its original
-			// position is not guaranteed
-			index := sort.Search(f.chunkBuffer.Len(), func(i int) bool {
-				return f.chunkBuffer.getSlot(i).chunkRange.from >= response.chunkRange.from
-			})
-
-			if response.error != nil {
-				f.logger.Error(
-					"error encountered during chunk fetch",
-					zap.String("error", response.error.Error()),
-				)
-			}
-
-			// The chunk still advances the latest height (so a single bad
-			// block can't stall the fetcher); queueing the missing heights lets
-			// the backfiller revisit them instead of skipping them silently.
-			if len(response.missingBlocks) > 0 {
-				f.gaps.add(response.missingBlocks...)
-
+			if len(item.missing) > 0 {
+				// The partial chunk stays in the slot and blocks the write loop
+				// below, so the missing blocks are never skipped. Only they are
+				// fetched again, instead of dropping and refetching the range
 				f.logger.Warn(
-					"blocks missing after retries, queued for backfill",
-					zap.Uint64s("heights", response.missingBlocks),
+					"blocks missing after retries, refetching",
+					zap.Uint64s("heights", item.missing),
 				)
+
+				f.retrying[item.chunkRange] = true
+
+				continue
 			}
-			// Save the chunk
-			f.chunkBuffer.setChunk(index, response.chunk)
+
+			delete(f.retrying, item.chunkRange)
 
 			for f.chunkBuffer.Len() > 0 {
 				// Peek the next sequential slot
 				item := f.chunkBuffer.getSlot(0)
 
-				if item.chunk == nil {
-					// Chunk not fetched yet, nothing to do
+				if !item.complete() {
+					// Chunk not fully fetched yet, nothing to do
 					break
 				}
 

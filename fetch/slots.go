@@ -1,6 +1,8 @@
 package fetch
 
 import (
+	"sort"
+
 	"github.com/gnolang/gno/tm2/pkg/bft/types"
 	queue "github.com/madz-lab/insertion-queue"
 )
@@ -16,6 +18,55 @@ type chunk struct {
 type slot struct {
 	chunk      *chunk     // retrieved data chunk
 	chunkRange chunkRange // retrieved data chunk range
+
+	// missing holds the heights of the range not yet present in chunk. A slot
+	// is only written out once it is complete (chunk set and missing empty),
+	// so the saved latest height never advances past an unfetched block
+	missing []uint64
+}
+
+// complete returns true when the slot holds every block of its range
+func (s *slot) complete() bool {
+	return s.chunk != nil && len(s.missing) == 0
+}
+
+// merge adds the fetched blocks into the slot's chunk and recomputes the
+// heights still missing from the range
+func (s *slot) merge(c *chunk) {
+	if s.chunk == nil {
+		s.chunk = &chunk{}
+	}
+
+	have := make(map[uint64]struct{}, len(s.chunk.blocks)+len(c.blocks))
+	for _, block := range s.chunk.blocks {
+		have[uint64(block.Height)] = struct{}{}
+	}
+
+	for i, block := range c.blocks {
+		height := uint64(block.Height)
+		if _, ok := have[height]; ok {
+			continue
+		}
+
+		have[height] = struct{}{}
+
+		s.chunk.blocks = append(s.chunk.blocks, block)
+		s.chunk.results = append(s.chunk.results, c.results[i])
+	}
+
+	sort.Sort(byHeight{s.chunk})
+
+	s.missing = missingHeights(s.chunkRange, have)
+}
+
+// byHeight sorts a chunk's blocks (and their paired results) by height
+type byHeight struct{ *chunk }
+
+func (b byHeight) Len() int           { return len(b.blocks) }
+func (b byHeight) Less(i, j int) bool { return b.blocks[i].Height < b.blocks[j].Height }
+func (b byHeight) Swap(i, j int) {
+	b.blocks[i], b.blocks[j] = b.blocks[j], b.blocks[i]
+	b.results[i], b.results[j] = b.results[j], b.results[i]
 }
 
 func (s *slot) Less(i queue.Item) bool {
@@ -52,12 +103,18 @@ func (s *slots) getSlot(index int) *slot {
 	return s.Index(index).(*slot)
 }
 
-// setChunk sets the chunk for the specified index
-func (s *slots) setChunk(index int, chunk *chunk) {
-	item := s.getSlot(index)
-	item.chunk = chunk
+// findSlot returns the index of the slot whose range contains the height,
+// or -1 if no such slot is reserved
+func (s *slots) findSlot(height uint64) int {
+	index := sort.Search(s.Len(), func(i int) bool {
+		return s.getSlot(i).chunkRange.to >= height
+	})
 
-	s.Queue[index] = item
+	if index == s.Len() || s.getSlot(index).chunkRange.from > height {
+		return -1
+	}
+
+	return index
 }
 
 // reserveChunkRanges reserves empty chunk ranges, and returns them, if any

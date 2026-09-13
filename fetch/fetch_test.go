@@ -1247,3 +1247,129 @@ func serializeTxs(t *testing.T, txs []*std.Tx) types.Txs {
 
 	return serializedTxs
 }
+
+// TestFetcher_PartialChunkRefetch verifies that a block whose tx results stay
+// unavailable longer than the worker retries is neither skipped nor causes the
+// whole range to be refetched: the fetched blocks stay in the slot, only the
+// missing height is fetched again, and nothing is written until it arrives.
+func TestFetcher_PartialChunkRefetch(t *testing.T) {
+	t.Parallel()
+
+	var cancelFn context.CancelFunc
+
+	var (
+		blockNum      = 10
+		flakyBlock    = uint64(5)
+		flakyFailures = int32(8) // more than the worker retries, so a refetch is needed
+		txCount       = 1
+		txs           = generateTransactions(t, txCount)
+		blocks        = generateBlocks(t, blockNum+1, txs)
+
+		mu            sync.Mutex
+		resultCalls   = make(map[uint64]int32)
+		savedBlocks   = make([]*types.Block, 0, blockNum)
+		latestHeights = make([]uint64, 0)
+
+		mockStorage = &mock.Storage{
+			GetLatestSavedHeightFn: func() (uint64, error) {
+				return 0, storageErrors.ErrNotFound
+			},
+			GetWriteBatchFn: func() storage.Batch {
+				return &mock.WriteBatch{
+					SetBlockFn: func(block *types.Block) error {
+						mu.Lock()
+						defer mu.Unlock()
+
+						savedBlocks = append(savedBlocks, block)
+
+						return nil
+					},
+					SetLatestHeightFn: func(height uint64) error {
+						mu.Lock()
+						defer mu.Unlock()
+
+						latestHeights = append(latestHeights, height)
+
+						if height == uint64(blockNum) {
+							cancelFn()
+						}
+
+						return nil
+					},
+				}
+			},
+		}
+
+		mockClient = &mockClient{
+			createBatchFn: func() clientTypes.Batch {
+				return &mockBatch{
+					executeFn: func(_ context.Context) ([]any, error) {
+						return nil, errors.New("batch unavailable")
+					},
+					countFn: func() int {
+						return 1
+					},
+				}
+			},
+			getLatestBlockNumberFn: func() (uint64, error) {
+				return uint64(blockNum), nil
+			},
+			getBlockFn: func(num uint64) (*core_types.ResultBlock, error) {
+				require.LessOrEqual(t, num, uint64(blockNum))
+
+				return &core_types.ResultBlock{
+					Block: blocks[num],
+				}, nil
+			},
+			getBlockResultsFn: func(num uint64) (*core_types.ResultBlockResults, error) {
+				mu.Lock()
+				resultCalls[num]++
+				calls := resultCalls[num]
+				mu.Unlock()
+
+				if num == flakyBlock && calls <= flakyFailures {
+					return nil, errors.New("results not indexed yet")
+				}
+
+				return mockBlockResults(int64(num), txCount), nil
+			},
+		}
+	)
+
+	f := New(
+		mockStorage,
+		mockClient,
+		&mockEvents{signalEventFn: func(_ events.Event) {}},
+		WithChunkFetchRetry(fastRetry.maxRetries, fastRetry.retryDelay),
+	)
+	f.queryInterval = 10 * time.Millisecond
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	defer cancelFn()
+
+	require.NoError(t, f.FetchChainData(ctx))
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Every block was saved exactly once, in order
+	require.Len(t, savedBlocks, blockNum)
+
+	for index, block := range savedBlocks {
+		assert.Equal(t, int64(index+1), block.Height)
+	}
+
+	// The latest height was only ever advanced once the range was complete
+	assert.Equal(t, []uint64{uint64(blockNum)}, latestHeights)
+
+	// The refetch targeted the flaky height, not the whole range
+	assert.Greater(t, resultCalls[flakyBlock], flakyFailures)
+
+	for height := uint64(1); height <= uint64(blockNum); height++ {
+		if height == flakyBlock {
+			continue
+		}
+
+		assert.Equal(t, int32(1), resultCalls[height], "block %d results fetched more than once", height)
+	}
+}

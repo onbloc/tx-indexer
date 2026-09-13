@@ -499,10 +499,7 @@ func (f *Fetcher) drainGaps(ctx context.Context) {
 // persists it without touching the latest-height pointer, so filling an old
 // gap never regresses the fetcher's forward progress.
 func (f *Fetcher) backfillBlock(ctx context.Context, height uint64) error {
-	c, missing, err := fetchChunk(ctx, f.client, chunkRange{from: height, to: height}, f.retry, f.logger)
-	if err != nil {
-		return err
-	}
+	c, missing := fetchChunk(ctx, f.client, chunkRange{from: height, to: height}, f.retry, f.logger)
 
 	if len(missing) > 0 || len(c.blocks) == 0 {
 		return fmt.Errorf("block %d still unavailable", height)

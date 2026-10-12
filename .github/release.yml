@@ -1,0 +1,20 @@
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+  categories:
+    - title: 새 기능
+      labels:
+        - enhancement
+    - title: 버그 수정
+      labels:
+        - bug
+    - title: 의존성
+      labels:
+        - dependencies
+    - title: 문서
+      labels:
+        - documentation
+    - title: 기타
+      labels:
+        - "*"

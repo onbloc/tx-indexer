@@ -1,6 +1,9 @@
 name: dev gnoswap push gnoswap-tx-indexer v2
 
 on:
+  push:
+    branches:
+      - develop
   workflow_dispatch:
 
 permissions:

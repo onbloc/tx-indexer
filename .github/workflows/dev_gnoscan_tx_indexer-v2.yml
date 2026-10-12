@@ -1,6 +1,9 @@
 name: dev gnoscan push onbloc-tx-indexer v2
 
 on:
+  push:
+    branches:
+      - develop
   workflow_dispatch:
 
 permissions:

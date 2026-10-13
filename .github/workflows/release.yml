@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       prefix:
-        description: Tag prefix
+        description: Tag prefix (ignored when redeploying)
         required: true
         type: choice
         options:
@@ -15,8 +15,13 @@ on:
           - mainnet-gnoswap
       version:
         description: Version (X.Y.Z)
-        required: true
+        required: false
         type: string
+      redeploy:
+        description: Redeploy the existing tag selected in 'Use workflow from' (skips tag and release creation)
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ inputs.prefix }}
@@ -28,8 +33,10 @@ permissions:
 jobs:
   prepare:
     name: Create tag and release notes
-    # main, chain/* 에서만 릴리스 가능
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/chain/')
+    # 릴리스는 main, chain/* 에서만, 재배포는 태그에서만 가능
+    if: >-
+      (!inputs.redeploy && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/chain/'))) ||
+      (inputs.redeploy && github.ref_type == 'tag')
     runs-on: ubuntu-latest
     environment: release
     outputs:
@@ -54,9 +61,30 @@ jobs:
         env:
           PREFIX: ${{ inputs.prefix }}
           VERSION: ${{ inputs.version }}
+          REDEPLOY: ${{ inputs.redeploy }}
         run: |
+          prefixes="staging-gnoscan testnet-gnoscan mainnet-gnoscan testnet-gnoswap mainnet-gnoswap"
+          # 재배포: 선택한 태그에서 prefix, 버전 추출
+          if [ "$REDEPLOY" = "true" ]; then
+            tag="$GITHUB_REF_NAME"
+            PREFIX="${tag%-v*}"
+            VERSION="${tag##*-v}"
+          fi
+          if ! echo " ${prefixes} " | grep -qF " ${PREFIX} "; then
+            echo "::error::Unknown prefix: ${PREFIX}"; exit 1
+          fi
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::Version must be X.Y.Z"; exit 1
+          fi
+          {
+            echo "prefix=${PREFIX}"
+            echo "version=${VERSION}"
+            echo "redeploy=${REDEPLOY}"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$REDEPLOY" = "true" ]; then
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "prev=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           tag="${PREFIX}-v${VERSION}"
           if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
@@ -80,13 +108,24 @@ jobs:
               fi
             done
           fi
+          # 같은 버전 태그는 모두 같은 커밋이어야 함
+          case "$PREFIX" in
+            *-gnoscan) GROUP="*-gnoscan-v${VERSION}" ;;
+            *) GROUP="*-gnoswap*-v${VERSION}" ;;
+          esac
+          for t in $(git tag --list "${GROUP}"); do
+            c=$(git rev-parse "${t}^{commit}")
+            if [ "$c" != "$GITHUB_SHA" ]; then
+              echo "::error::${t} points to ${c:0:7}, not ${GITHUB_SHA:0:7}"; exit 1
+            fi
+          done
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "prev=${prev}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve deploy targets
         id: targets
         env:
-          PREFIX: ${{ inputs.prefix }}
+          PREFIX: ${{ steps.tag.outputs.prefix }}
         run: |
           gnoscan="onbloc/onbloc-helm-charts"
           gnoswap="gnoswap-labs/gnoswap-helm-charts"
@@ -94,8 +133,7 @@ jobs:
             staging-gnoscan) env=prd-stage-gnoscan-v2;   repo=$gnoscan; helm=prd;         network=staging ;;
             testnet-gnoscan) env=prd-testnet-gnoscan-v2; repo=$gnoscan; helm=prd;         network=testnet ;;
             mainnet-gnoscan) env=prd-gnoscan-v2;         repo=$gnoscan; helm=prd;         network=mainnet ;;
-            # testnet-gnoswap: 신규, env 는 mainnet 값 재사용 (확인 필요)
-            testnet-gnoswap) env=prd-gnoswap-v2;         repo=$gnoswap; helm=prd-testnet; network= ;;
+            testnet-gnoswap) env=prd-gnoswap-testnet;    repo=$gnoswap; helm=prd-testnet; network= ;;
             mainnet-gnoswap) env=prd-gnoswap-v2;         repo=$gnoswap; helm=prd-green;   network= ;;
             *) echo "::error::Unknown prefix: ${PREFIX}"; exit 1 ;;
           esac
@@ -104,6 +142,7 @@ jobs:
           echo "targets=${targets}" >> "$GITHUB_OUTPUT"
 
       - name: Push tag
+        if: steps.tag.outputs.redeploy != 'true'
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
@@ -111,6 +150,7 @@ jobs:
           git push origin "refs/tags/${TAG}"
 
       - name: Create GitHub Release
+        if: steps.tag.outputs.redeploy != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ steps.tag.outputs.tag }}
@@ -126,11 +166,24 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ steps.tag.outputs.tag }}
           PREV: ${{ steps.tag.outputs.prev }}
+          REDEPLOY: ${{ steps.tag.outputs.redeploy }}
           SLACK_TOKEN: ${{ secrets.SLACK_RELEASE_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ vars.SLACK_RELEASE_CHANNEL_ID }}
         run: |
           if [ -z "$SLACK_TOKEN" ] || [ -z "$SLACK_CHANNEL" ]; then
             echo "Slack is not configured, skipping"; exit 0
+          fi
+          if [ "$REDEPLOY" = "true" ]; then
+            res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg t "*${GITHUB_REPOSITORY}* \`${TAG}\` 재배포 by ${GITHUB_ACTOR}" \
+                '{channel: $ch, text: $t}' \
+              | curl -sS -X POST https://slack.com/api/chat.postMessage \
+                  -H "Authorization: Bearer ${SLACK_TOKEN}" \
+                  -H 'Content-Type: application/json; charset=utf-8' -d @-)
+            if [ "$(echo "$res" | jq -r .ok)" != "true" ]; then
+              echo "::warning::Failed to post to Slack: $(echo "$res" | jq -r .error)"; exit 0
+            fi
+            echo "ts=$(echo "$res" | jq -r .ts)" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           url=$(gh release view "$TAG" --json url -q .url)
           # GitHub markdown -> Slack mrkdwn

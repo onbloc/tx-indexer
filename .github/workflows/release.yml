@@ -1,0 +1,305 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: Tag prefix (ignored when redeploying)
+        required: true
+        type: choice
+        options:
+          - staging-gnoscan
+          - testnet-gnoscan
+          - mainnet-gnoscan
+          - testnet-gnoswap
+          - mainnet-gnoswap
+      version:
+        description: Version (X.Y.Z)
+        required: false
+        type: string
+      redeploy:
+        description: Redeploy the existing tag selected in 'Use workflow from' (skips tag and release creation)
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ inputs.prefix }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Create tag and release notes
+    # 릴리스는 main, chain/* 에서만, 재배포는 태그에서만 가능
+    if: >-
+      (!inputs.redeploy && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/chain/'))) ||
+      (inputs.redeploy && github.ref_type == 'tag')
+    runs-on: ubuntu-latest
+    environment: release
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      targets: ${{ steps.targets.outputs.targets }}
+      slack_ts: ${{ steps.slack.outputs.ts }}
+      slack_channel: ${{ steps.slack.outputs.channel }}
+      slack_text_b64: ${{ steps.slack.outputs.text_b64 }}
+      deploy_url: ${{ steps.targets.outputs.deploy_url }}
+      deploy_label: ${{ steps.targets.outputs.deploy_label }}
+    steps:
+      - name: Create release app token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Check release permission
+        # service-managers 팀 멤버만 릴리스 가능
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ORG: ${{ github.repository_owner }}
+          TEAM: ${{ vars.RELEASE_TEAM || 'service-managers' }}
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          state=$(gh api "orgs/${ORG}/teams/${TEAM}/memberships/${ACTOR}" --jq .state 2>/dev/null || true)
+          if [ "$state" != "active" ]; then
+            echo "::error::${ACTOR} is not an active member of ${ORG}/${TEAM}"; exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Validate tag
+        id: tag
+        env:
+          PREFIX: ${{ inputs.prefix }}
+          VERSION: ${{ inputs.version }}
+          REDEPLOY: ${{ inputs.redeploy }}
+        run: |
+          prefixes="staging-gnoscan testnet-gnoscan mainnet-gnoscan testnet-gnoswap mainnet-gnoswap"
+          # 재배포: 선택한 태그에서 prefix, 버전 추출
+          if [ "$REDEPLOY" = "true" ]; then
+            tag="$GITHUB_REF_NAME"
+            PREFIX="${tag%-v*}"
+            VERSION="${tag##*-v}"
+          fi
+          if ! echo " ${prefixes} " | grep -qF " ${PREFIX} "; then
+            echo "::error::Unknown prefix: ${PREFIX}"; exit 1
+          fi
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Version must be X.Y.Z"; exit 1
+          fi
+          {
+            echo "prefix=${PREFIX}"
+            echo "version=${VERSION}"
+            echo "redeploy=${REDEPLOY}"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$REDEPLOY" = "true" ]; then
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "prev=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="${PREFIX}-v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::error::Tag ${tag} already exists"; exit 1
+          fi
+          # 같은 prefix의 직전 태그
+          prev=$(git tag --list "${PREFIX}-v*" --sort=-v:refname \
+            | grep -E "^${PREFIX}-v[0-9]+\.[0-9]+\.[0-9]+$" | head -n1 || true)
+          if [ -n "$prev" ]; then
+            prev_ver="${prev#"${PREFIX}"-v}"
+            top=$(printf '%s\n%s\n' "$prev_ver" "$VERSION" | sort -V | tail -n1)
+            if [ "$top" != "$VERSION" ] || [ "$prev_ver" = "$VERSION" ]; then
+              echo "::error::${VERSION} must be greater than ${prev}"; exit 1
+            fi
+          fi
+          # mainnet-gnoscan 은 같은 버전의 staging/testnet 태그가 먼저 있어야 함
+          if [ "$PREFIX" = "mainnet-gnoscan" ]; then
+            for pre in staging-gnoscan testnet-gnoscan; do
+              if ! git rev-parse -q --verify "refs/tags/${pre}-v${VERSION}" >/dev/null; then
+                echo "::error::Tag ${pre}-v${VERSION} must exist first"; exit 1
+              fi
+            done
+          fi
+          # 같은 버전 태그는 모두 같은 커밋이어야 함
+          case "$PREFIX" in
+            *-gnoscan) GROUP="*-gnoscan-v${VERSION}" ;;
+            *) GROUP="*-gnoswap*-v${VERSION}" ;;
+          esac
+          for t in $(git tag --list "${GROUP}"); do
+            c=$(git rev-parse "${t}^{commit}")
+            if [ "$c" != "$GITHUB_SHA" ]; then
+              echo "::error::${t} points to ${c:0:7}, not ${GITHUB_SHA:0:7}"; exit 1
+            fi
+          done
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "prev=${prev}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve deploy targets
+        id: targets
+        env:
+          PREFIX: ${{ steps.tag.outputs.prefix }}
+        run: |
+          gnoscan="onbloc/onbloc-helm-charts"
+          gnoswap="gnoswap-labs/gnoswap-helm-charts"
+          case "$PREFIX" in
+            staging-gnoscan) env=prd-stage-gnoscan-v2;   repo=$gnoscan; helm=prd;         network=staging ;;
+            testnet-gnoscan) env=prd-testnet-gnoscan-v2; repo=$gnoscan; helm=prd;         network=testnet ;;
+            mainnet-gnoscan) env=prd-gnoscan-v2;         repo=$gnoscan; helm=prd;         network=mainnet ;;
+            testnet-gnoswap) env=prd-gnoswap-testnet;    repo=$gnoswap; helm=prd-testnet; network= ;;
+            mainnet-gnoswap) env=prd-gnoswap-v2;         repo=$gnoswap; helm=prd-green;   network= ;;
+            *) echo "::error::Unknown prefix: ${PREFIX}"; exit 1 ;;
+          esac
+          targets=$(jq -cn --arg env "$env" --arg repo "$repo" --arg helm "$helm" --arg network "$network" '
+            [{ app_name: "tx-indexer", env: $env, helm_chart_repo: $repo, helm_branch: $helm, network: $network }]')
+          echo "targets=${targets}" >> "$GITHUB_OUTPUT"
+          # 배포 결과 링크: helm 차트 브랜치 커밋 히스토리
+          {
+            echo "deploy_url=https://github.com/${repo}/commits/${helm}"
+            echo "deploy_label=${repo#*/}@${helm}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        if: steps.tag.outputs.redeploy != 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Create GitHub Release
+        if: steps.tag.outputs.redeploy != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PREV: ${{ steps.tag.outputs.prev }}
+        run: |
+          args=(--verify-tag --title "$TAG" --generate-notes)
+          if [ -n "$PREV" ]; then args+=(--notes-start-tag "$PREV"); fi
+          gh release create "$TAG" "${args[@]}"
+
+      - name: Post release to Slack
+        id: slack
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PREFIX: ${{ steps.tag.outputs.prefix }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PREV: ${{ steps.tag.outputs.prev }}
+          REDEPLOY: ${{ steps.tag.outputs.redeploy }}
+          SLACK_TOKEN: ${{ secrets.SLACK_RELEASE_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ vars.SLACK_RELEASE_CHANNEL_ID }}
+        run: |
+          if [ -z "$SLACK_TOKEN" ] || [ -z "$SLACK_CHANNEL" ]; then
+            echo "Slack is not configured, skipping"; exit 0
+          fi
+          post() {
+            curl -sS -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${SLACK_TOKEN}" \
+              -H 'Content-Type: application/json; charset=utf-8' -d @-
+          }
+          url=$(gh release view "$TAG" --json url -q .url 2>/dev/null \
+            || echo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}")
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$REDEPLOY" = "true" ]; then
+            tag_info="\`${TAG}\` (Redeploy)"
+            count="-"
+          else
+            if [ -n "$PREV" ]; then prev_label="\`${PREV}\`"; else prev_label="최초"; fi
+            tag_info="\`${TAG}\` (${prev_label})"
+            if [ -n "$PREV" ]; then
+              count=$(git rev-list --count "${PREV}..${GITHUB_SHA}")
+            else
+              count=$(git rev-list --count "$GITHUB_SHA")
+            fi
+          fi
+          # 배포 결과는 notify job 에서 __DEPLOYMENT__ 를 치환해 메시지를 갱신
+          template=$(printf '%s\n' \
+            "[${GITHUB_REPOSITORY_OWNER}] ${GITHUB_REPOSITORY#*/} (${PREFIX})" \
+            "- Tag: ${tag_info}" \
+            "- Change Commit: ${count}" \
+            "- Release Note: <${url}|링크>" \
+            "- Action Log: <${run_url}|링크>" \
+            "- Deployment: __DEPLOYMENT__")
+          text="${template//__DEPLOYMENT__/배포 중}"
+          res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg t "$text" '{channel: $ch, text: $t}' | post)
+          if [ "$(echo "$res" | jq -r .ok)" != "true" ]; then
+            echo "::warning::Failed to post to Slack: $(echo "$res" | jq -r .error)"; exit 0
+          fi
+          ts=$(echo "$res" | jq -r .ts)
+          {
+            echo "ts=${ts}"
+            echo "channel=$(echo "$res" | jq -r .channel)"
+            echo "text_b64=$(printf '%s' "$template" | base64 -w0)"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$REDEPLOY" = "true" ]; then
+            exit 0
+          fi
+          # 릴리스 노트를 스레드로 등록 (GitHub markdown -> Slack mrkdwn)
+          body=$(gh release view "$TAG" --json body -q .body \
+            | sed -E 's/^#+ (.*)$/*\1*/; s/\[([^]]+)\]\(([^)]+)\)/<\2|\1>/g')
+          if [ "${#body}" -gt 3500 ]; then
+            body="${body:0:3500}"$'\n'"… <${url}|전체 보기>"
+          fi
+          res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg ts "$ts" --arg t "${body:-변경 사항 없음}" \
+              '{channel: $ch, thread_ts: $ts, text: $t}' | post)
+          if [ "$(echo "$res" | jq -r .ok)" != "true" ]; then
+            echo "::warning::Failed to post release notes to Slack thread: $(echo "$res" | jq -r .error)"
+          fi
+
+  deploy:
+    name: Deploy (${{ matrix.app_name }})
+    needs: prepare
+    permissions:
+      contents: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.targets) }}
+    uses: ./.github/workflows/app_template.yml
+    with:
+      app-name: ${{ matrix.app_name }}
+      env: ${{ matrix.env }}
+      helm-chart-repo: ${{ matrix.helm_chart_repo }}
+      helm-branch: ${{ matrix.helm_branch }}
+      network: ${{ matrix.network }}
+    secrets:
+      AWS_IAM_OIDC: ${{ secrets.AWS_IAM_OIDC }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      REGION: ${{ secrets.PRD_REGION_V2 }}
+
+  notify:
+    name: Notify deploy result
+    needs: [prepare, deploy]
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.slack_ts != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Slack message with deploy result
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_RELEASE_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ needs.prepare.outputs.slack_channel }}
+          SLACK_TS: ${{ needs.prepare.outputs.slack_ts }}
+          TEXT_B64: ${{ needs.prepare.outputs.slack_text_b64 }}
+          RESULT: ${{ needs.deploy.result }}
+          DEPLOY_URL: ${{ needs.prepare.outputs.deploy_url }}
+          DEPLOY_LABEL: ${{ needs.prepare.outputs.deploy_label }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$RESULT" = "success" ]; then
+            deployment="<${DEPLOY_URL}|${DEPLOY_LABEL}>"
+          else
+            deployment="실패 (<${RUN_URL}|로그>)"
+          fi
+          template=$(echo "$TEXT_B64" | base64 -d)
+          res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg ts "$SLACK_TS" --arg t "$template" --arg d "$deployment" \
+              '{channel: $ch, ts: $ts, text: ($t | gsub("__DEPLOYMENT__"; $d))}' \
+            | curl -sS -X POST https://slack.com/api/chat.update \
+                -H "Authorization: Bearer ${SLACK_TOKEN}" \
+                -H 'Content-Type: application/json; charset=utf-8' -d @-) || true
+          if [ "$(echo "$res" | jq -r .ok 2>/dev/null)" != "true" ]; then
+            echo "::warning::Failed to update Slack message: $(echo "$res" | jq -r .error 2>/dev/null)"
+          fi

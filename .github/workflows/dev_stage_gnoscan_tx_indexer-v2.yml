@@ -3,7 +3,7 @@ name: dev stage gnoscan push onbloc-tx-indexer v2
 on:
   push:
     branches:
-      - staging
+      - develop
   workflow_dispatch:
 
 permissions:

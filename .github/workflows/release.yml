@@ -43,6 +43,10 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       targets: ${{ steps.targets.outputs.targets }}
       slack_ts: ${{ steps.slack.outputs.ts }}
+      slack_channel: ${{ steps.slack.outputs.channel }}
+      slack_text_b64: ${{ steps.slack.outputs.text_b64 }}
+      deploy_url: ${{ steps.targets.outputs.deploy_url }}
+      deploy_label: ${{ steps.targets.outputs.deploy_label }}
     steps:
       - name: Create release app token
         id: app
@@ -153,6 +157,11 @@ jobs:
           targets=$(jq -cn --arg env "$env" --arg repo "$repo" --arg helm "$helm" --arg network "$network" '
             [{ app_name: "tx-indexer", env: $env, helm_chart_repo: $repo, helm_branch: $helm, network: $network }]')
           echo "targets=${targets}" >> "$GITHUB_OUTPUT"
+          # 배포 결과 링크: helm 차트 브랜치 커밋 히스토리
+          {
+            echo "deploy_url=https://github.com/${repo}/commits/${helm}"
+            echo "deploy_label=${repo#*/}@${helm}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Push tag
         if: steps.tag.outputs.redeploy != 'true'
@@ -173,10 +182,11 @@ jobs:
           if [ -n "$PREV" ]; then args+=(--notes-start-tag "$PREV"); fi
           gh release create "$TAG" "${args[@]}"
 
-      - name: Post release notes to Slack
+      - name: Post release to Slack
         id: slack
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          PREFIX: ${{ steps.tag.outputs.prefix }}
           TAG: ${{ steps.tag.outputs.tag }}
           PREV: ${{ steps.tag.outputs.prev }}
           REDEPLOY: ${{ steps.tag.outputs.redeploy }}
@@ -186,37 +196,58 @@ jobs:
           if [ -z "$SLACK_TOKEN" ] || [ -z "$SLACK_CHANNEL" ]; then
             echo "Slack is not configured, skipping"; exit 0
           fi
+          post() {
+            curl -sS -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${SLACK_TOKEN}" \
+              -H 'Content-Type: application/json; charset=utf-8' -d @-
+          }
+          url=$(gh release view "$TAG" --json url -q .url 2>/dev/null \
+            || echo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}")
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           if [ "$REDEPLOY" = "true" ]; then
-            res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg t "*${GITHUB_REPOSITORY}* \`${TAG}\` 재배포 by ${GITHUB_ACTOR}" \
-                '{channel: $ch, text: $t}' \
-              | curl -sS -X POST https://slack.com/api/chat.postMessage \
-                  -H "Authorization: Bearer ${SLACK_TOKEN}" \
-                  -H 'Content-Type: application/json; charset=utf-8' -d @-)
-            if [ "$(echo "$res" | jq -r .ok)" != "true" ]; then
-              echo "::warning::Failed to post to Slack: $(echo "$res" | jq -r .error)"; exit 0
+            tag_info="\`${TAG}\` (재배포)"
+            count="-"
+          else
+            tag_info="\`${TAG}\` (\`${PREV:-최초}\`)"
+            if [ -n "$PREV" ]; then
+              count=$(git rev-list --count "${PREV}..${GITHUB_SHA}")
+            else
+              count=$(git rev-list --count "$GITHUB_SHA")
             fi
-            echo "ts=$(echo "$res" | jq -r .ts)" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
-          url=$(gh release view "$TAG" --json url -q .url)
-          # GitHub markdown -> Slack mrkdwn
-          body=$(gh release view "$TAG" --json body -q .body \
-            | sed -E 's/^#+ (.*)$/*\1*/; s/\[([^]]+)\]\(([^)]+)\)/<\2|\1>/g' | head -c 2800)
-          header="*${GITHUB_REPOSITORY}* \`${TAG}\` (기준: \`${PREV:-최초}\`) by ${GITHUB_ACTOR}"
-          res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg h "$header" --arg b "${body:-변경 사항 없음}" --arg u "$url" '{
-              channel: $ch, text: $h,
-              blocks: [
-                {type: "section", text: {type: "mrkdwn", text: $h}},
-                {type: "section", text: {type: "mrkdwn", text: $b}},
-                {type: "context", elements: [{type: "mrkdwn", text: ("<" + $u + "|릴리스 노트 전체 보기>")}]}
-              ]}' \
-            | curl -sS -X POST https://slack.com/api/chat.postMessage \
-                -H "Authorization: Bearer ${SLACK_TOKEN}" \
-                -H 'Content-Type: application/json; charset=utf-8' -d @-)
+          # 배포 결과는 notify job 에서 __DEPLOYMENT__ 를 치환해 메시지를 갱신
+          template=$(printf '%s\n' \
+            "[${GITHUB_REPOSITORY_OWNER}] ${GITHUB_REPOSITORY#*/} (${PREFIX})" \
+            "- Tag: ${tag_info}" \
+            "- Change Commit: ${count}" \
+            "- Release Note: <${url}|링크>" \
+            "- Action Log: <${run_url}|링크>" \
+            "- Deployment: __DEPLOYMENT__")
+          text="${template//__DEPLOYMENT__/배포 중}"
+          res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg t "$text" '{channel: $ch, text: $t}' | post)
           if [ "$(echo "$res" | jq -r .ok)" != "true" ]; then
             echo "::warning::Failed to post to Slack: $(echo "$res" | jq -r .error)"; exit 0
           fi
-          echo "ts=$(echo "$res" | jq -r .ts)" >> "$GITHUB_OUTPUT"
+          ts=$(echo "$res" | jq -r .ts)
+          {
+            echo "ts=${ts}"
+            echo "channel=$(echo "$res" | jq -r .channel)"
+            echo "text_b64=$(printf '%s' "$template" | base64 -w0)"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$REDEPLOY" = "true" ]; then
+            exit 0
+          fi
+          # 릴리스 노트를 스레드로 등록 (GitHub markdown -> Slack mrkdwn)
+          body=$(gh release view "$TAG" --json body -q .body \
+            | sed -E 's/^#+ (.*)$/*\1*/; s/\[([^]]+)\]\(([^)]+)\)/<\2|\1>/g')
+          if [ "${#body}" -gt 3500 ]; then
+            body="${body:0:3500}"$'\n'"… <${url}|전체 보기>"
+          fi
+          res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg ts "$ts" --arg t "${body:-변경 사항 없음}" \
+              '{channel: $ch, thread_ts: $ts, text: $t}' | post)
+          if [ "$(echo "$res" | jq -r .ok)" != "true" ]; then
+            echo "::warning::Failed to post release notes to Slack thread: $(echo "$res" | jq -r .error)"
+          fi
 
   deploy:
     name: Deploy (${{ matrix.app_name }})
@@ -246,18 +277,28 @@ jobs:
     if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.slack_ts != ''
     runs-on: ubuntu-latest
     steps:
-      - name: Post result to Slack thread
+      - name: Update Slack message with deploy result
         env:
           SLACK_TOKEN: ${{ secrets.SLACK_RELEASE_BOT_TOKEN }}
-          SLACK_CHANNEL: ${{ vars.SLACK_RELEASE_CHANNEL_ID }}
-          THREAD_TS: ${{ needs.prepare.outputs.slack_ts }}
+          SLACK_CHANNEL: ${{ needs.prepare.outputs.slack_channel }}
+          SLACK_TS: ${{ needs.prepare.outputs.slack_ts }}
+          TEXT_B64: ${{ needs.prepare.outputs.slack_text_b64 }}
           RESULT: ${{ needs.deploy.result }}
-          TAG: ${{ needs.prepare.outputs.tag }}
+          DEPLOY_URL: ${{ needs.prepare.outputs.deploy_url }}
+          DEPLOY_LABEL: ${{ needs.prepare.outputs.deploy_label }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [ "$RESULT" = "success" ]; then status="배포 성공"; else status="배포 실패 (${RESULT})"; fi
-          jq -n --arg ch "$SLACK_CHANNEL" --arg ts "$THREAD_TS" --arg t "\`${TAG}\` ${status} <${RUN_URL}|실행 로그>" \
-            '{channel: $ch, thread_ts: $ts, text: $t}' \
-          | curl -sS -X POST https://slack.com/api/chat.postMessage \
-              -H "Authorization: Bearer ${SLACK_TOKEN}" \
-              -H 'Content-Type: application/json; charset=utf-8' -d @- >/dev/null
+          if [ "$RESULT" = "success" ]; then
+            deployment="<${DEPLOY_URL}|${DEPLOY_LABEL}>"
+          else
+            deployment="실패 (<${RUN_URL}|로그>)"
+          fi
+          template=$(echo "$TEXT_B64" | base64 -d)
+          res=$(jq -n --arg ch "$SLACK_CHANNEL" --arg ts "$SLACK_TS" --arg t "$template" --arg d "$deployment" \
+              '{channel: $ch, ts: $ts, text: ($t | gsub("__DEPLOYMENT__"; $d))}' \
+            | curl -sS -X POST https://slack.com/api/chat.update \
+                -H "Authorization: Bearer ${SLACK_TOKEN}" \
+                -H 'Content-Type: application/json; charset=utf-8' -d @-) || true
+          if [ "$(echo "$res" | jq -r .ok 2>/dev/null)" != "true" ]; then
+            echo "::warning::Failed to update Slack message: $(echo "$res" | jq -r .error 2>/dev/null)"
+          fi

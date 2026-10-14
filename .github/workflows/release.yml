@@ -205,10 +205,11 @@ jobs:
             || echo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}")
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           if [ "$REDEPLOY" = "true" ]; then
-            tag_info="\`${TAG}\` (재배포)"
+            tag_info="\`${TAG}\` (Redeploy)"
             count="-"
           else
-            tag_info="\`${TAG}\` (\`${PREV:-최초}\`)"
+            if [ -n "$PREV" ]; then prev_label="\`${PREV}\`"; else prev_label="최초"; fi
+            tag_info="\`${TAG}\` (${prev_label})"
             if [ -n "$PREV" ]; then
               count=$(git rev-list --count "${PREV}..${GITHUB_SHA}")
             else
